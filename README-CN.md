@@ -335,4 +335,14 @@ fn render_complex_sql() {
 
 ## 许可证
 
-MIT License © 2023 [Your Name]
+本项目基于 [Apache License 2.0](LICENSE) 许可证发布。  
+版权所有 © 2025 [gouhengheng]
+
+> **重要声明**:  
+> 根据 Apache 2.0 许可证，除非遵守许可证要求，否则不得使用本文件。  
+> 你可以在以下链接获取完整的许可证文本：  
+> <http://www.apache.org/licenses/LICENSE-2.0>  
+>  
+> 除非适用法律要求或书面同意，本软件按“原样”分发，  
+> 无任何明示或暗示的担保或条件。  
+> 详见许可证中的具体条款。
