@@ -1,0 +1,26 @@
+[package]
+name = "sqlx-askama-template"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+members = [".", "sqlx-askama-template-macro"]
+[dependencies]
+askama = "0.13.0"
+
+sqlx = { version = "0.8.3", default-features = false }
+sqlx-askama-template-macro = { path = "./sqlx-askama-template-macro" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+
+[[example]]
+name = "example_marco" # 对应 examples/基础示例.rs
+required-features = [
+    "sqlx/macros",
+    "sqlx/any",
+    "sqlx/postgres",      # PostgreSQL支持
+    "sqlx/mysql",         # MySQL支持
+    "sqlx/sqlite",        # SQLite支持
+    "sqlx/runtime-tokio", # 
+]
