@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 use sqlx::{Arguments, Database, Execute};
 pub use sqlx_askama_template_macro::*;
 use std::cell::RefCell;

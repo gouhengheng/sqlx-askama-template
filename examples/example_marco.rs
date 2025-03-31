@@ -162,6 +162,7 @@ fn render_complex_sql() {
 async fn main() -> sqlx::Result<()> {
     simple_query().await?;
     render_complex_sql();
+
     Ok(())
 }
 

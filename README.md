@@ -332,7 +332,7 @@ fn render_complex_sql() {
 ## License
 
 This project is licensed under the [Apache License 2.0](LICENSE).  
-Copyright © 2025 [gouhengheng]
+Copyright © 2025 gouhengheng
 
 > **NOTICE**:  
 > Licensed under the Apache License, Version 2.0 (the "License");  

@@ -2,6 +2,12 @@
 name = "sqlx-askama-template"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+description = "Type-safe SQL templates with Askama and SQLx"
+repository = "https://github.com/gouhengheng/sqlx-askama-template"
+readme = "README.md"
+keywords = ["sqlx", "askama", "database", "template"]
+categories = ["database", "template-engine"]
 
 [workspace]
 members = [".", "sqlx-askama-template-macro"]

@@ -336,7 +336,7 @@ fn render_complex_sql() {
 ## 许可证
 
 本项目基于 [Apache License 2.0](LICENSE) 许可证发布。  
-版权所有 © 2025 [gouhengheng]
+版权所有 © 2025 gouhengheng
 
 > **重要声明**:  
 > 根据 Apache 2.0 许可证，除非遵守许可证要求，否则不得使用本文件。  
