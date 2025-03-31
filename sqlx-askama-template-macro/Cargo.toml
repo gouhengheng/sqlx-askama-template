@@ -2,7 +2,11 @@
 name = "sqlx-askama-template-macro"
 version = "0.1.0"
 edition = "2024"
-
+license = "Apache-2.0"
+description = "Procedural macro for SQLx + Askama integration"
+repository = "https://github.com/gouhengheng/sqlx-askama-template"
+keywords = ["sqlx", "askama", "macro"]
+categories = ["database", "template-engine"]
 [lib]
 proc-macro = true
 

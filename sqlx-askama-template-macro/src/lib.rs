@@ -11,6 +11,65 @@ struct TypeIdentifier(String);
 fn get_type_identifier(ty: &syn::Type) -> TypeIdentifier {
     TypeIdentifier(quote!(#ty).to_string())
 }
+/// Derive macro for generating type-safe SQL templates using Askama.
+///
+/// This macro generates boilerplate code to integrate Askama templates with SQLx queries,
+/// providing compile-time SQL validation and parameter binding.
+///
+/// # Attributes
+///
+/// ## `#[template(...)]` (Required)
+/// Defines the SQL template configuration. Accepts these parameters:
+/// - `source`: Inline SQL template content (supports Askama syntax)
+/// - `ext`: File extension for Askama template engine
+/// - `print`: Debug output options (none|ast|code|all)
+/// - `config`: Path to custom Askama configuration file
+///
+/// ## `#[addtype(...)]` (Optional)
+/// Specifies additional type constraints for template variables:
+/// - Accepts comma-separated types implementing `sqlx::Type + sqlx::Encode`
+/// - Required when using non-field types in template logic
+///
+/// ## `#[ignore_type]` (Optional)
+/// Marks struct fields to skip SQLx type validation:
+/// - Use for fields that shouldn't participate in parameter binding
+/// - Typically used for helper fields or complex types
+///
+/// # Example
+/// ```
+/// use sqlx_askama_template::SqlTemplate;
+///
+/// #[derive(SqlTemplate)]
+/// #[template(
+///     source = r#"
+///     SELECT * FROM users
+///     WHERE name = {{e(name)}}
+///     AND age > {{e(min_age)}}
+///     "#,
+///     ext = "sql"
+/// )]
+/// #[addtype(i32)]
+/// struct UserQuery<'a> {
+///     name: &'a str,
+///     #[ignore_type]
+///     min_age: i32,
+/// }
+/// ```
+///
+/// # Generated Implementation
+/// Implements `SqlTemplate` trait with these methods:
+/// - `render_sql() -> Result<(String, Arguments<DB>)>`
+/// - `render_execute() -> Result<RenderExecute<DB>>`
+///
+/// # Panics
+/// - If required `source` attribute is missing
+/// - If template syntax errors are detected at compile time
+/// - If type constraints for template variables are unsatisfied
+///
+/// # Note
+/// The generated code requires these dependencies in scope:
+/// - `sqlx::{Encode, Type, Arguments}`
+/// - `askama::Template`
 #[proc_macro_derive(SqlTemplate, attributes(template, addtype, ignore_type))]
 pub fn sql_template(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
