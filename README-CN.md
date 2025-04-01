@@ -25,7 +25,7 @@
 ```toml
 [dependencies]
 sqlx-askama-template = "0.1"
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio"] }
+sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
 askama = "0.13.0"
 tokio = { version = "1.0", features = ["full"] }
 ```
@@ -35,10 +35,8 @@ tokio = { version = "1.0", features = ["full"] }
 ### 基本使用
 
 ```rust
-use std::collections::HashMap;
-
 use sqlx::any::install_default_drivers;
-use sqlx::{AnyPool, Arguments, MySqlPool};
+use sqlx::{AnyPool, MySqlPool};
 use sqlx::{Executor, FromRow};
 use sqlx_askama_template::SqlTemplate;
 
@@ -82,18 +80,13 @@ async fn main() -> sqlx::Result<()> {
         user_name: "admin".to_string(),
     };
     //pg
-    unsafe {
-        std::env::set_var(
-            "DATABASE_URL",
-            "postgres://postgres:postgres@localhost/postgres",
-        );
-    }
 
-    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap()).await?;
-    let mut render_execute = user_query
-        .render_execute()
+    let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
+    let mut sql_buff = String::new();
+    let execute = user_query
+        .render_execute_able(&mut sql_buff)
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let execute = render_execute.as_execute();
+
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
     for row in &rows {
@@ -103,12 +96,11 @@ async fn main() -> sqlx::Result<()> {
 
     //sqlite+any
     install_default_drivers();
-    let pool = AnyPool::connect("sqlite://db.sqlite").await?;
-
-    let mut render_execute = user_query
-        .render_execute()
+    let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
+    let mut sql_buff = String::new();
+    let execute = user_query
+        .render_execute_able(&mut sql_buff)
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let execute = render_execute.as_execute();
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
     for row in &rows {
@@ -120,10 +112,11 @@ async fn main() -> sqlx::Result<()> {
 
     let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
 
-    let mut render_execute = user_query
-        .render_execute()
+    let mut sql_buff = String::new();
+    let mut execute = user_query
+        .render_execute_able(&mut sql_buff)
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let execute = render_execute.as_execute();
+    execute.set_persistent(false);
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
     for row in &rows {
@@ -132,47 +125,8 @@ async fn main() -> sqlx::Result<()> {
     assert_eq!(db_users, users);
     Ok(())
 }
-
-
 ```
 
-### 复杂查询示例
-
-```rust
-#[derive(SqlTemplate)]
-#[template(
-    source = r#"
-    {% let status_list = ["active", "pending"] %}
-    SELECT 
-        u.id,
-        u.name,
-        COUNT(o.id) AS order_count
-    FROM users u
-    LEFT JOIN orders o ON u.id = o.user_id
-    WHERE 1=1
-    {% if let Some(min_age) = min_age %}
-        AND age >= {{et(min_age)}}
-    {% endif %}
-    {% if filter_names.len()>0 %}
-        AND name IN ({{el(filter_names)}})
-    {% endif %}
-    AND status IN ({{etl(*status_list)}})
-    GROUP BY u.id
-    ORDER BY {{e(order_field)}}
-    LIMIT {{e(limit)}}
-    "#,
-    ext = "txt"
-)]
-#[addtype(i32)]
-pub struct ComplexQuery<'a> {
-    min_age: Option<i32>,
-    #[ignore_type]
-    filter_names: Vec<&'a str>,
-    order_field: &'a str,
-    limit: usize,
-}
-
-```
 
 ## 核心功能
 
@@ -181,7 +135,7 @@ pub struct ComplexQuery<'a> {
 | 语法           | 示例                     | 描述               |
 |----------------|--------------------------|--------------------|
 | 单参数绑定     | `{{e(user_id)}}`     | 绑定单个参数       |
-| 列表展开       | `{{el(ids)}}`        | 展开为 IN 条件     |
+| 列表展开       | `{{el(ids)}}`        | 展开为 IN (?,?) 条件     |
 | 临时变量       | `{% let limit = 100 %}` | 定义模板局部变量 |
 | 条件查询       | `{% if active %}...{% endif %}` | 动态条件拼接 |
 
@@ -190,9 +144,9 @@ pub struct ComplexQuery<'a> {
 | 方法   | 描述                      | 示例             |
 |--------|---------------------------|------------------|
 | `e()`  | 编码单个值                | `{{e(user_id)}}` |
-| `el()` | 展开列表为逗号分隔参数    | `{{el(ids)}}` |
+| `el()` | 编码一个列表($1,$2..$n)    | `{{el(ids)}}` |
 | `et()` | 编码模板内临时值          | `{{et(limit)}}` |
-| `etl()`| 展开模板内临时列表        | `{{etl(filters)}}` |
+| `etl()`| 编码一个模板内列表($1,$2..$n)       | `{{etl(filters)}}` |
 
 ## 多数据库支持
 
@@ -224,7 +178,7 @@ pub struct ComplexQuery<'a> {
 - `print`: askama调试模式
 - `config`: 指向自定义Askama配置文件的路径
 
-### `#[addtype]` - 添加额外类型约束
+### `#[addtype]` - 添加额外类型约束，一般用于给Vec<T>,HashMap<K,V>,模板内部声明变量等情况添加数据库Enocde约束
 
 ```rust
 #[derive(SqlTemplate)]
@@ -235,7 +189,7 @@ pub struct ComplexQuery<'a> {
 - 为模板中使用的非字段类型添加`Encode + Type`约束
 - 支持逗号分隔的多个类型
 
-### `#[ignore_type]` - 忽略字段类型约束
+### `#[ignore_type]` - 忽略字段类型,不会添加数据库Enocde约束
 
 ```rust
 #[derive(SqlTemplate)]
@@ -254,10 +208,56 @@ struct Query {
 ```rust
 use std::collections::HashMap;
 
-use sqlx::any::install_default_drivers;
-use sqlx::{AnyPool, Arguments, MySqlPool};
-use sqlx::{Executor, FromRow};
 use sqlx_askama_template::SqlTemplate;
+
+#[derive(SqlTemplate)]
+#[template(
+    source = r#"
+    {% let status_list = ["active", "pending"] %}
+    SELECT 
+        u.id,
+        u.name,
+        COUNT(o.id) AS order_count
+    FROM users u
+    LEFT JOIN orders o ON u.id = o.user_id
+    WHERE 1=1
+    {% if let Some(min_age) = min_age %}
+        AND age >= {{et(min_age)}}
+    {% endif %}
+    {% if filter_names.len()>0 %}
+        AND name IN {{el(filter_names)}}
+    {% endif %}
+    AND status IN {{etl(*status_list)}}
+    GROUP BY u.id
+    ORDER BY {{order_field}}
+    LIMIT {{e(limit)}}
+    "#,
+    ext = "txt"
+)]
+#[addtype(i32)]
+pub struct ComplexQuery<'a> {
+    min_age: Option<i32>,
+    #[ignore_type]
+    filter_names: Vec<&'a str>,
+    order_field: &'a str,
+    limit: i64,
+}
+
+#[test]
+fn render_complex_sql() {
+    let data = ComplexQuery {
+        filter_names: vec!["name1", "name2"],
+        limit: 10,
+        min_age: Some(18),
+        order_field: "id",
+    };
+
+    let (sql, arg) =
+        <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+    use sqlx::Arguments;
+    assert_eq!(arg.unwrap().len(), 6);
+    println!("----{sql}----");
+}
 
 #[derive(SqlTemplate)]
 #[addtype(Option<&'a i64>,bool)]
@@ -304,8 +304,8 @@ where
     #[allow(unused)]
     arg6: T,
 }
-
-fn render_complex_sql() {
+#[test]
+fn render_query_data_sql() {
     let data = QueryData {
         arg1: 42,
         _arg1: 123,
@@ -318,10 +318,12 @@ fn render_complex_sql() {
 
     let (sql, arg) =
         <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
-
+    use sqlx::Arguments;
     assert_eq!(arg.unwrap().len(), 18);
     println!("----{sql}----");
 }
+
+
 ```
 
 ## 最佳实践

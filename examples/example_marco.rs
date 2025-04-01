@@ -44,18 +44,13 @@ async fn simple_query() -> sqlx::Result<()> {
         user_name: "admin".to_string(),
     };
     //pg
-    unsafe {
-        std::env::set_var(
-            "DATABASE_URL",
-            "postgres://postgres:postgres@localhost/postgres",
-        );
-    }
 
-    let pool = sqlx::PgPool::connect(&std::env::var("DATABASE_URL").unwrap()).await?;
-    let mut render_execute = user_query
-        .render_execute()
+    let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
+    let mut sql_buff = String::new();
+    let execute = user_query
+        .render_execute_able(&mut sql_buff)
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let execute = render_execute.as_execute();
+
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
     for row in &rows {
@@ -65,12 +60,11 @@ async fn simple_query() -> sqlx::Result<()> {
 
     //sqlite+any
     install_default_drivers();
-    let pool = AnyPool::connect("sqlite://db.sqlite").await?;
-
-    let mut render_execute = user_query
-        .render_execute()
+    let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
+    let mut sql_buff = String::new();
+    let execute = user_query
+        .render_execute_able(&mut sql_buff)
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let execute = render_execute.as_execute();
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
     for row in &rows {
@@ -82,10 +76,11 @@ async fn simple_query() -> sqlx::Result<()> {
 
     let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
 
-    let mut render_execute = user_query
-        .render_execute()
+    let mut sql_buff = String::new();
+    let mut execute = user_query
+        .render_execute_able(&mut sql_buff)
         .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let execute = render_execute.as_execute();
+    execute.set_persistent(false);
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
     for row in &rows {
@@ -141,6 +136,39 @@ where
     arg6: T,
 }
 
+#[derive(SqlTemplate)]
+#[template(
+    source = r#"
+    {% let status_list = ["active", "pending"] %}
+    SELECT 
+        u.id,
+        u.name,
+        COUNT(o.id) AS order_count
+    FROM users u
+    LEFT JOIN orders o ON u.id = o.user_id
+    WHERE 1=1
+    {% if let Some(min_age) = min_age %}
+        AND age >= {{et(min_age)}}
+    {% endif %}
+    {% if filter_names.len()>0 %}
+        AND name IN {{el(filter_names)}}
+    {% endif %}
+    AND status IN {{etl(*status_list)}}
+    GROUP BY u.id
+    ORDER BY {{order_field}}
+    LIMIT {{e(limit)}}
+    "#,
+    ext = "txt"
+)]
+#[addtype(i32)]
+pub struct ComplexQuery<'a> {
+    min_age: Option<i32>,
+    #[ignore_type]
+    filter_names: Vec<&'a str>,
+    order_field: &'a str,
+    limit: i64,
+}
+
 fn render_complex_sql() {
     let data = QueryData {
         arg1: 42,
@@ -157,6 +185,19 @@ fn render_complex_sql() {
 
     assert_eq!(arg.unwrap().len(), 18);
     println!("----{sql}----");
+
+    let data = ComplexQuery {
+        filter_names: vec!["name1", "name2"],
+        limit: 10,
+        min_age: Some(18),
+        order_field: "id",
+    };
+
+    let (sql, arg) =
+        <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+
+    assert_eq!(arg.unwrap().len(), 6);
+    println!("----{sql}----");
 }
 #[tokio::main]
 async fn main() -> sqlx::Result<()> {
@@ -164,37 +205,4 @@ async fn main() -> sqlx::Result<()> {
     render_complex_sql();
 
     Ok(())
-}
-
-#[derive(SqlTemplate)]
-#[template(
-    source = r#"
-    {% let status_list = ["active", "pending"] %}
-    SELECT 
-        u.id,
-        u.name,
-        COUNT(o.id) AS order_count
-    FROM users u
-    LEFT JOIN orders o ON u.id = o.user_id
-    WHERE 1=1
-    {% if let Some(min_age) = min_age %}
-        AND age >= {{et(min_age)}}
-    {% endif %}
-    {% if filter_names.len()>0 %}
-        AND name IN ({{el(filter_names)}})
-    {% endif %}
-    AND status IN ({{etl(*status_list)}})
-    GROUP BY u.id
-    ORDER BY {{e(order_field)}}
-    LIMIT {{e(limit)}}
-    "#,
-    ext = "txt"
-)]
-#[addtype(i32)]
-pub struct ComplexQuery<'a> {
-    min_age: Option<i32>,
-    #[ignore_type]
-    filter_names: Vec<&'a str>,
-    order_field: &'a str,
-    limit: usize,
 }

@@ -739,17 +739,28 @@ dependencies = [
 
 [[package]]
 name = "sqlx-askama-template"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "askama",
  "sqlx",
- "sqlx-askama-template-macro",
+ "sqlx-askama-template-macro 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "tokio",
 ]
 
 [[package]]
 name = "sqlx-askama-template-macro"
 version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "sqlx-askama-template-macro"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdc2b8c175a8936152b36b20e2ebf5cd601f31991eb8c24d3e25b45967923456"
 dependencies = [
  "proc-macro2",
  "quote",

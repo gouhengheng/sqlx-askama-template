@@ -3,74 +3,8 @@ use sqlx::{Arguments, Database, Execute};
 pub use sqlx_askama_template_macro::*;
 use std::cell::RefCell;
 
-/// Represents the result of SQL template rendering
-///
-/// Contains generated SQL query and bound parameters ready for execution
-///
-/// # Generic Parameters
-/// - `'q`: Lifetime for query parameters
-/// - `DB`: Database type (PostgreSQL/MySQL/SQLite etc.)
-pub struct SqlTemplateResult<'q, DB: Database> {
-    /// The generated SQL query string
-    pub(crate) sql: String,
-    /// Bound SQL parameters
-    pub(crate) arguments: Option<DB::Arguments<'q>>,
-    /// Whether the query should be prepared as persistent
-    pub(crate) persistent: bool,
-}
-
-impl<'q, DB: Database> SqlTemplateResult<'q, DB> {
-    /// Creates a new SQL template result
-    pub fn new(sql: String, arguments: Option<DB::Arguments<'q>>) -> Self {
-        SqlTemplateResult {
-            sql,
-            arguments,
-            persistent: true,
-        }
-    }
-
-    /// Gets reference to the SQL query string
-    pub fn get_sql(&self) -> &str {
-        &self.sql
-    }
-
-    /// Updates the SQL query string
-    pub fn set_sql(&mut self, sql: String) {
-        self.sql = sql;
-    }
-
-    /// Takes ownership of the bound arguments
-    pub fn get_arguments(&mut self) -> Option<DB::Arguments<'q>> {
-        self.arguments.take()
-    }
-
-    /// Sets new SQL arguments
-    pub fn set_arguments(&mut self, arguments: DB::Arguments<'q>) {
-        self.arguments = Some(arguments);
-    }
-
-    /// Checks if query is marked as persistent
-    pub fn is_persistent(&self) -> bool {
-        self.persistent
-    }
-
-    /// Sets the persistent flag for the query
-    pub fn set_persistent(&mut self, persistent: bool) {
-        self.persistent = persistent;
-    }
-
-    /// Converts into an executable query object
-    pub fn as_execute(&'q mut self) -> impl Execute<'q, DB> {
-        SqlTemplateExecute {
-            sql: &self.sql,
-            arguments: self.arguments.take(),
-            persistent: self.persistent,
-        }
-    }
-}
-
 /// Internal executor for SQL templates
-struct SqlTemplateExecute<'q, DB: Database> {
+pub struct SqlTemplateExecute<'q, DB: Database> {
     /// Reference to SQL query string
     pub(crate) sql: &'q str,
     /// SQL parameters
@@ -78,7 +12,11 @@ struct SqlTemplateExecute<'q, DB: Database> {
     /// Persistent flag
     pub(crate) persistent: bool,
 }
-
+impl<DB: Database> SqlTemplateExecute<'_, DB> {
+    pub fn set_persistent(&mut self, persistent: bool) {
+        self.persistent = persistent;
+    }
+}
 impl<'q, DB: Database> Execute<'q, DB> for SqlTemplateExecute<'q, DB> {
     /// Returns the SQL query string
     fn sql(&self) -> &'q str {
@@ -215,8 +153,18 @@ where
     fn render_sql(self) -> Result<(String, Option<DB::Arguments<'q>>), askama::Error>;
 
     /// Renders SQL template and returns executable query result
-    fn render_execute(self) -> Result<SqlTemplateResult<'q, DB>, askama::Error> {
+    fn render_execute_able(
+        self,
+        sql_buffer: &'q mut String,
+    ) -> Result<SqlTemplateExecute<'q, DB>, askama::Error> {
         let (sql, arguments) = self.render_sql()?;
-        Ok(SqlTemplateResult::new(sql, arguments))
+        *sql_buffer = sql;
+        Ok(SqlTemplateExecute {
+            sql: sql_buffer,
+
+            arguments,
+
+            persistent: true,
+        })
     }
 }
