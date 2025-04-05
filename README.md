@@ -1,14 +1,12 @@
-[file name]: README.md  
-[file content begin]  
 # SQLx Askama Template  
 
-[![Crates.io](https://img.shields.io/crates/v/sqlx-askama-template)](https://crates.io/crates/sqlx-askama-template)  
-[![Documentation](https://docs.rs/sqlx-askama-template/badge.svg)](https://docs.rs/sqlx-askama-template)  
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)  
-[![GitHub License](https://img.shields.io/github/license/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template)  
-[![GitHub Stars](https://img.shields.io/github/stars/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template/stargazers)  
-[![GitHub Issues](https://img.shields.io/github/issues/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template/issues)  
-[![CI Status](https://github.com/gouhengheng/sqlx-askama-template/actions/workflows/ci.yml/badge.svg)](https://github.com/gouhengheng/sqlx-askama-template/actions)  
+[![Crates.io](https://img.shields.io/crates/v/sqlx-askama-template)](https://crates.io/crates/sqlx-askama-template)
+[![Documentation](https://docs.rs/sqlx-askama-template/badge.svg)](https://docs.rs/sqlx-askama-template)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub License](https://img.shields.io/github/license/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template)
+[![GitHub Stars](https://img.shields.io/github/stars/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template/stargazers)
+[![GitHub Issues](https://img.shields.io/github/issues/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template/issues)
+[![CI Status](https://github.com/gouhengheng/sqlx-askama-template/actions/workflows/ci.yml/badge.svg)](https://github.com/gouhengheng/sqlx-askama-template/actions)
 
 A SQLx query builder based on the Askama template engine, providing type-safe SQL templates and parameter binding.  
 
@@ -26,7 +24,7 @@ Add to `Cargo.toml`:
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.1"  
+sqlx-askama-template = "0.2"  
 sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }  
 askama = "0.13.0"  
 tokio = { version = "1.0", features = ["full"] }  
@@ -100,10 +98,12 @@ async fn main() -> sqlx::Result<()> {
     install_default_drivers();
     let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
     let mut sql_buff = String::new();
-    let execute = user_query
+    let rows = user_query
         .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let rows = pool.fetch_all(execute).await?;
+        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?
+        .fetch_all(&pool)
+        .await?;
+
     let mut db_users = Vec::new();
     for row in &rows {
         db_users.push(User::from_row(row)?);
@@ -115,18 +115,17 @@ async fn main() -> sqlx::Result<()> {
     let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
 
     let mut sql_buff = String::new();
-    let mut execute = user_query
+    let db_users: Vec<User> = user_query
         .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    execute.set_persistent(false);
-    let rows = pool.fetch_all(execute).await?;
-    let mut db_users = Vec::new();
-    for row in &rows {
-        db_users.push(User::from_row(row)?);
-    }
+        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?
+        .set_persistent(false)
+        .fetch_all_as(&pool)
+        .await?;
+
     assert_eq!(db_users, users);
     Ok(())
 }
+
 ```  
 
 ## Core Features  
@@ -349,4 +348,3 @@ Copyright © 2025 gouhengheng
 > distributed under the License is distributed on an "AS IS" BASIS,  
 > WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
 > See the License for specific governing permissions and limitations.  
-[file content end]
