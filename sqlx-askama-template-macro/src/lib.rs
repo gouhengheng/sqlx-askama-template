@@ -245,27 +245,49 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
             #bound_types
 
         {
-            fn render_sql(
+            fn render_sql_with_encode_placeholder_fn(
                 self,
+                f: ::std::option::Option<fn(usize, &mut String)>,
             ) -> ::std::result::Result<
                 (
                     ::std::string::String,
                     ::std::option::Option<DB::Arguments<#data_lifetime>>,
                 ),
-                ::askama::Error,
+                ::sqlx_askama_template::Error,
             > {
-                let wrapper: #wrapper_name #wrapper_ty_generics = #wrapper_name {
+                let mut wrapper: #wrapper_name #wrapper_ty_generics = #wrapper_name {
                     data: self,
                     arguments: ::std::default::Default::default(),
                 };
-
-                let sql = ::askama::Template::render(&wrapper)?;
-                if let ::std::option::Option::Some(e) = wrapper.arguments.get_err() {
-                    return ::std::result::Result::Err(::askama::Error::Custom(e));
+                if let Some(f)=f{
+                    wrapper.arguments.set_encode_placeholder_fn(f);
                 }
-                let arg = wrapper.arguments.get_arguments();
 
-                ::std::result::Result::Ok((sql, arg))
+                let render_res = ::askama::Template::render(&wrapper);
+                let arg = wrapper.arguments.get_arguments();
+                let encode_err = wrapper.arguments.get_err();
+                match render_res{
+                    ::std::result::Result::Ok(sql)=>{
+                        if let Some(e)=encode_err{
+                            return  ::std::result::Result::Err(e);
+                        }
+
+                        ::std::result::Result::Ok((sql, arg))
+                    }
+                    ::std::result::Result::Err(askama_err)=>{
+                        if let Some(e)=encode_err{
+
+                                if let ::sqlx_askama_template::Error::MultipleErrors(mut error) = e {
+                                    error.push(askama_err.into());
+                                    return ::std::result::Result::Err(::sqlx_askama_template::Error::MultipleErrors(error));
+                                }
+
+                            return  ::std::result::Result::Err(::sqlx_askama_template::Error::MultipleErrors(vec![e,askama_err.into()]));
+                        }
+                        return  ::std::result::Result::Err(askama_err.into());
+                    }
+                }
+
             }
         }
     };

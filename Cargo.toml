@@ -11,11 +11,23 @@ categories = ["database", "template-engine"]
 
 [workspace]
 members = [".", "sqlx-askama-template-macro"]
+
+[features]
+full = ["postgres", "mysql", "sqlite", "any"]
+postgres = ["sqlx/postgres"]
+mysql = ["sqlx/mysql"]
+sqlite = ["sqlx/sqlite"]
+any = ["sqlx/any", "dep:sqlx-core", "dep:tracing"]
 [dependencies]
+sqlx = { version = "0.8", default-features = false }
+#sqlx-askama-template-macro = "0.1.0"
+sqlx-askama-template-macro = { path = "./sqlx-askama-template-macro" }
 askama = "0.13.0"
 futures-core = "0.3.31"
-sqlx = { version = "0.8", default-features = false }
-sqlx-askama-template-macro = "0.1.0"
+thiserror = "2.0.12"
+futures-util = "0.3.31"
+sqlx-core = { version = "0.8", optional = true }
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
@@ -28,5 +40,16 @@ required-features = [
     "sqlx/postgres",      # PostgreSQL支持
     "sqlx/mysql",         # MySQL支持
     "sqlx/sqlite",        # SQLite支持
+    "sqlx/runtime-tokio", # 
+]
+
+[[example]]
+name = "example_adapter" # 对应 examples/example_adapter.rs
+required-features = [
+    "sqlx/macros",
+    "any",
+    "postgres",           # PostgreSQL支持
+    "mysql",              # MySQL支持
+    "sqlite",             # SQLite支持
     "sqlx/runtime-tokio", # 
 ]

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use sqlx::any::install_default_drivers;
 use sqlx::{AnyPool, Arguments, MySqlPool};
 use sqlx::{Executor, FromRow};
+use sqlx_askama_template::Error;
 use sqlx_askama_template::SqlTemplate;
-
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
 struct User {
     id: i64,
@@ -27,7 +27,7 @@ pub struct UserQuery {
     pub user_name: String,
 }
 
-async fn simple_query() -> sqlx::Result<()> {
+async fn simple_query() -> Result<(), Error> {
     let users = vec![
         User {
             id: 1,
@@ -47,9 +47,7 @@ async fn simple_query() -> sqlx::Result<()> {
 
     let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
     let mut sql_buff = String::new();
-    let execute = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    let execute = user_query.render_execute_able(&mut sql_buff)?;
 
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
@@ -62,10 +60,11 @@ async fn simple_query() -> sqlx::Result<()> {
     install_default_drivers();
     let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
     let mut sql_buff = String::new();
-    let execute = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let rows = pool.fetch_all(execute).await?;
+    let rows = user_query
+        .render_execute_able(&mut sql_buff)?
+        .fetch_all(&pool)
+        .await?;
+
     let mut db_users = Vec::new();
     for row in &rows {
         db_users.push(User::from_row(row)?);
@@ -77,15 +76,12 @@ async fn simple_query() -> sqlx::Result<()> {
     let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
 
     let mut sql_buff = String::new();
-    let mut execute = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    execute.set_persistent(false);
-    let rows = pool.fetch_all(execute).await?;
-    let mut db_users = Vec::new();
-    for row in &rows {
-        db_users.push(User::from_row(row)?);
-    }
+    let db_users: Vec<User> = user_query
+        .render_execute_able(&mut sql_buff)?
+        .set_persistent(false)
+        .fetch_all_as(&pool)
+        .await?;
+
     assert_eq!(db_users, users);
     Ok(())
 }
@@ -200,7 +196,7 @@ fn render_complex_sql() {
     println!("----{sql}----");
 }
 #[tokio::main]
-async fn main() -> sqlx::Result<()> {
+async fn main() -> Result<(), Error> {
     simple_query().await?;
     render_complex_sql();
 
