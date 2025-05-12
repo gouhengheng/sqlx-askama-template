@@ -16,7 +16,7 @@ pub struct PageInfo {
 }
 
 impl PageInfo {
-    pub(crate) fn new(total: i64, page_size: i64) -> PageInfo {
+    pub fn new(total: i64, page_size: i64) -> PageInfo {
         let mut page_count = total / page_size;
         if total % page_size > 0 {
             page_count += 1;

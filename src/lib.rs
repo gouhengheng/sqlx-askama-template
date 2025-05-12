@@ -1,7 +1,8 @@
 #![doc = include_str!("../README.md")]
 
 use db_adapter::DBAdapterManager;
-use sqlx::{Database, database::HasStatementCache};
+use sqlx::Database;
+
 pub use sqlx_askama_template_macro::*;
 
 pub mod db_adapter;
@@ -42,10 +43,7 @@ where
             persistent: true,
         })
     }
-    fn render_db_adpter_manager(self, sql_buff: &'q mut String) -> DBAdapterManager<'q, DB, Self>
-    where
-        DB: HasStatementCache,
-    {
+    fn render_db_adpter_manager(self, sql_buff: &'q mut String) -> DBAdapterManager<'q, DB, Self> {
         DBAdapterManager::new(self, sql_buff)
     }
 }

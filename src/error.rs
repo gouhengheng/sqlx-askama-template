@@ -7,7 +7,7 @@ pub enum Error {
     #[error("askama rerror: {0}")]
     AskamaError(#[from] askama::Error),
     #[error("AskamaTemplate error: {0}")]
-    AskamaTemplate(String),
+    Message(String),
     #[error("fmt error: {0}")]
     FmtError(#[from] std::fmt::Error),
     #[error("AskamaTemplate MultipleErrors: {0:?}")]
@@ -16,18 +16,18 @@ pub enum Error {
 
 impl From<String> for Error {
     fn from(e: String) -> Self {
-        Error::AskamaTemplate(e)
+        Error::Message(e)
     }
 }
 
 impl From<&String> for Error {
     fn from(e: &String) -> Self {
-        Error::AskamaTemplate(e.clone())
+        Error::Message(e.clone())
     }
 }
 impl From<&str> for Error {
     fn from(e: &str) -> Self {
-        Error::AskamaTemplate(e.to_string())
+        Error::Message(e.to_string())
     }
 }
 

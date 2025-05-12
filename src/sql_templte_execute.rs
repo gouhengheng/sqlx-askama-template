@@ -55,7 +55,8 @@ impl<'q, DB: Database> SqlTemplateExecute<'q, DB> {
 }
 impl<'q, DB> SqlTemplateExecute<'q, DB>
 where
-    DB: Database,
+    DB: Database + HasStatementCache,
+    DB::Arguments<'q>: IntoArguments<'q, DB>,
 {
     /// to sqlx::QueryAs
     /// Converts the SQL template to a `QueryAs` object, which can be executed to fetch rows
@@ -63,8 +64,6 @@ where
     pub fn to_query_as<O>(self) -> QueryAs<'q, DB, O, DB::Arguments<'q>>
     where
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
-        DB: HasStatementCache,
-        DB::Arguments<'q>: IntoArguments<'q, DB>,
     {
         let q = match self.arguments {
             Some(args) => query_as_with(self.sql, args),
@@ -75,11 +74,7 @@ where
     /// to sqlx::Query
     /// Converts the SQL template to a `Query` object, which can be executed to fetch rows
     #[inline]
-    pub fn to_query(self) -> Query<'q, DB, DB::Arguments<'q>>
-    where
-        DB: HasStatementCache,
-        DB::Arguments<'q>: IntoArguments<'q, DB>,
-    {
+    pub fn to_query(self) -> Query<'q, DB, DB::Arguments<'q>> {
         let q = match self.arguments {
             Some(args) => {
                 //   let wrap = ArgWrapper(args);
@@ -99,8 +94,6 @@ where
     where
         F: FnMut(DB::Row) -> O + Send,
         O: Unpin,
-        DB: HasStatementCache,
-        DB::Arguments<'q>: IntoArguments<'q, DB>,
     {
         self.to_query().map(f)
     }
@@ -112,12 +105,14 @@ where
     where
         F: FnMut(DB::Row) -> Result<O, sqlx::Error> + Send,
         O: Unpin,
-        DB: HasStatementCache,
-        DB::Arguments<'q>: IntoArguments<'q, DB>,
     {
         self.to_query().try_map(f)
     }
-
+}
+impl<'q, DB> SqlTemplateExecute<'q, DB>
+where
+    DB: Database,
+{
     /// like sqlx::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
