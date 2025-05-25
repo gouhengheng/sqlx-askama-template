@@ -1,17 +1,11 @@
 #![doc = include_str!("../README.md")]
 
-use db_adapter::DBAdapterManager;
-use sqlx::Database;
-
+use sqlx_core::{Error, database::Database};
+mod v3;
+pub use askama;
 pub use sqlx_askama_template_macro::*;
+pub use v3::*;
 
-pub mod db_adapter;
-mod error;
-mod sql_templte_execute;
-mod template_arg;
-pub use error::*;
-pub use sql_templte_execute::*;
-pub use template_arg::*;
 /// SQL template trait
 ///
 /// Defines basic operations for rendering SQL from templates
@@ -22,10 +16,13 @@ where
     fn render_sql_with_encode_placeholder_fn(
         self,
         f: Option<fn(usize, &mut String)>,
-    ) -> Result<(String, Option<DB::Arguments<'q>>), Error>;
+        sql_buffer: &mut String,
+    ) -> Result<Option<DB::Arguments<'q>>, Error>;
     /// Renders SQL template and returns query string with parameters
     fn render_sql(self) -> Result<(String, Option<DB::Arguments<'q>>), Error> {
-        self.render_sql_with_encode_placeholder_fn(None)
+        let mut sql_buff = String::new();
+        let arg = self.render_sql_with_encode_placeholder_fn(None, &mut sql_buff)?;
+        Ok((sql_buff, arg))
     }
 
     /// Renders SQL template and returns executable query result
@@ -43,7 +40,7 @@ where
             persistent: true,
         })
     }
-    fn render_db_adpter_manager(self, sql_buff: &'q mut String) -> DBAdapterManager<'q, DB, Self> {
+    fn render_db_adapter_manager(self, sql_buff: &'q mut String) -> DBAdapterManager<'q, DB, Self> {
         DBAdapterManager::new(self, sql_buff)
     }
 }

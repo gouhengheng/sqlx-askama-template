@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
-use sqlx::any::install_default_drivers;
-use sqlx::{AnyPool, Arguments, MySqlPool};
-use sqlx::{Executor, FromRow};
-use sqlx_askama_template::Error;
+use sqlx::{AnyPool, Arguments, Error, Executor, FromRow, MySqlPool, any::install_default_drivers};
+
 use sqlx_askama_template::SqlTemplate;
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
 struct User {
@@ -11,17 +9,14 @@ struct User {
     name: String,
 }
 #[derive(SqlTemplate)]
-#[template(
-    ext = "txt",
-    source = r#"
+#[template(ext="html",askama=askama,source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
     union all 
     {% let id=99999_i64 %}
     {% let name="super man" %}
     select {{et(id)}} as id,{{et(name)}} as name
-"#
-)]
-#[addtype(&'q str)]
+"#)]
+#[add_type(&'q str)]
 pub struct UserQuery {
     pub user_id: i64,
     pub user_name: String,
@@ -87,9 +82,8 @@ async fn simple_query() -> Result<(), Error> {
 }
 
 #[derive(SqlTemplate)]
-#[addtype(Option<&'a i64>,bool)]
+#[add_type(Option<&'a i64>,bool)]
 #[template(
-    ext = "txt",
     source = r#"
     {% let v="abc".to_string() %}
     SELECT {{et(v)}} as v,t.* FROM table t
@@ -133,8 +127,7 @@ where
 }
 
 #[derive(SqlTemplate)]
-#[template(
-    source = r#"
+#[template(source = r#"
     {% let status_list = ["active", "pending"] %}
     SELECT 
         u.id,
@@ -153,10 +146,8 @@ where
     GROUP BY u.id
     ORDER BY {{order_field}}
     LIMIT {{e(limit)}}
-    "#,
-    ext = "txt"
-)]
-#[addtype(i32)]
+    "#)]
+#[add_type(i32)]
 pub struct ComplexQuery<'a> {
     min_age: Option<i32>,
     #[ignore_type]

@@ -1,9 +1,12 @@
-use std::collections::BTreeSet;
-
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::{format_ident, quote};
-use syn::parse::Parser;
-use syn::{DeriveInput, LifetimeParam, Meta, parse_macro_input};
+use std::collections::BTreeSet;
+use syn::{
+    DeriveInput, LifetimeParam, LitStr, Meta, Path, Token, parse::Parser, parse_macro_input,
+    punctuated::Punctuated,
+};
+
 // 用于比较类型的辅助结构
 #[derive(Ord, PartialOrd, Eq, PartialEq)]
 struct TypeIdentifier(String);
@@ -11,81 +14,76 @@ struct TypeIdentifier(String);
 fn get_type_identifier(ty: &syn::Type) -> TypeIdentifier {
     TypeIdentifier(quote!(#ty).to_string())
 }
-/// Derive macro for generating type-safe SQL templates using Askama.
-///
-/// This macro generates boilerplate code to integrate Askama templates with SQLx queries,
-/// providing compile-time SQL validation and parameter binding.
-///
-/// # Attributes
-///
-/// ## `#[template(...)]` (Required)
-/// Defines the SQL template configuration. Accepts these parameters:
-/// - `source`: Inline SQL template content (supports Askama syntax)
-/// - `ext`: File extension for Askama template engine
-/// - `print`: Debug output options (none|ast|code|all)
-/// - `config`: Path to custom Askama configuration file
-///
-/// ## `#[addtype(...)]` (Optional)
-/// Specifies additional type constraints for template variables:
-/// - Accepts comma-separated types implementing `sqlx::Type + sqlx::Encode`
-/// - Required when using non-field types in template logic
-///
-/// ## `#[ignore_type]` (Optional)
-/// Marks struct fields to skip SQLx type validation:
-/// - Use for fields that shouldn't participate in parameter binding
-/// - Typically used for helper fields or complex types
-///
-/// # Example
-/// ```
-/// use sqlx_askama_template::SqlTemplate;
-///
-/// #[derive(SqlTemplate)]
-/// #[template(
-///     source = r#"
-///     SELECT * FROM users
-///     WHERE name = {{e(name)}}
-///     AND age > {{e(min_age)}}
-///     "#,
-///     ext = "sql"
-/// )]
-/// #[addtype(i32)]
-/// struct UserQuery<'a> {
-///     name: &'a str,
-///     #[ignore_type]
-///     min_age: i32,
-/// }
-/// ```
-///
-/// # Generated Implementation
-/// Implements `SqlTemplate` trait with these methods:
-/// - `render_sql() -> Result<(String, Arguments<DB>)>`
-/// - `render_execute() -> Result<RenderExecute<DB>>`
-///
-/// # Panics
-/// - If required `source` attribute is missing
-/// - If template syntax errors are detected at compile time
-/// - If type constraints for template variables are unsatisfied
-///
-/// # Note
-/// The generated code requires these dependencies in scope:
-/// - `sqlx::{Encode, Type, Arguments}`
-/// - `askama::Template`
-#[proc_macro_derive(SqlTemplate, attributes(template, addtype, ignore_type))]
+/// 处理并增强 `#[template]` 属性，添加必要的默认值
+fn process_template_attr(input: &DeriveInput) -> Punctuated<Meta, Token![,]> {
+    let mut args = Punctuated::<Meta, Token![,]>::new();
+    for attr in &input.attrs {
+        if !attr.path().is_ident("template") {
+            continue;
+        }
+        // 处理template属性
+        let mut has_askama = false;
+        let mut has_source = false;
+        let mut has_ext = false;
+
+        let nested = match attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        for meta in &nested {
+            if meta.path().is_ident("source") {
+                has_source = true;
+            }
+            if meta.path().is_ident("ext") {
+                has_ext = true;
+            }
+            if meta.path().is_ident("askama") {
+                has_askama = true;
+            }
+            args.push(meta.clone());
+        }
+
+        // 设置默认值
+
+        if !has_askama {
+            let askama_meta = Meta::NameValue(syn::MetaNameValue {
+                path: syn::Path::from(syn::Ident::new("askama", Span::call_site())),
+                eq_token: <syn::Token![=]>::default(),
+                value: syn::Expr::Path(syn::ExprPath {
+                    attrs: Vec::new(),
+                    qself: None,
+                    path: syn::parse_str::<Path>("::sqlx_askama_template::askama").unwrap(),
+                }),
+            });
+            args.push_punct(Token![,](Span::call_site()));
+            args.push_value(askama_meta);
+        }
+
+        if has_source && !has_ext {
+            // 添加 ext = "txt"
+            let ext_meta = Meta::NameValue(syn::MetaNameValue {
+                path: syn::Path::from(syn::Ident::new("ext", Span::call_site())),
+                eq_token: <syn::Token![=]>::default(),
+                value: syn::Expr::Lit(syn::ExprLit {
+                    attrs: Vec::new(),
+                    lit: syn::Lit::Str(LitStr::new("txt", Span::call_site())),
+                }),
+            });
+            args.push_punct(Token![,](Span::call_site()));
+            args.push_value(ext_meta);
+        }
+    }
+
+    args
+}
+
+#[proc_macro_derive(SqlTemplate, attributes(template, add_type, ignore_type))]
 pub fn sql_template(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let name: &syn::Ident = &input.ident;
+    let name = &input.ident;
     let generics = &input.generics;
-
-    //let impl_generics = generics.clone();
-
-    let wrapper_name = format_ident!("{}Wrapper", name);
-
-    // 收集所有template属性
-    let template_attrs: Vec<_> = input
-        .attrs
-        .iter()
-        .filter(|attr| attr.path().is_ident("template"))
-        .collect();
+    //处理template
+    let template_attrs = process_template_attr(&input);
 
     // 处理生命周期参数
     let (mut wrapper_generics, data_lifetime) = if let Some(lt) = generics.lifetimes().next() {
@@ -112,12 +110,12 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
             eq_token: None,
             default: None,
         }));
-    // 使用 BTreeSet 存储唯一类型标识
-    let mut seen_types = BTreeSet::new();
+
     // 收集需要绑定的类型
+    let mut seen_types = BTreeSet::new();
     let mut bound_types = proc_macro2::TokenStream::new();
 
-    // 1. 处理默认绑定（非ignore_type字段）
+    // 处理字段类型
     if let syn::Data::Struct(data_struct) = &input.data {
         for field in &data_struct.fields {
             let has_ignore = field
@@ -135,159 +133,78 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
             }
         }
     }
-    // 2. 处理addtype属性添加的类型
+
+    // 处理addtype属性
     for attr in &input.attrs {
-        if attr.path().is_ident("addtype") {
-            match &attr.meta {
-                Meta::List(meta_list) => {
-                    let parser =
-                        syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated;
-                    if let Ok(types) = parser.parse2(meta_list.tokens.clone()) {
-                        for ty in types {
-                            let ident = get_type_identifier(&ty);
-                            if seen_types.insert(ident) {
-                                bound_types.extend(quote! {
-                                    #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
-                                });
-                            }
+        if attr.path().is_ident("add_type") {
+            if let Meta::List(meta_list) = &attr.meta {
+                let parser =
+                    syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated;
+                if let Ok(types) = parser.parse2(meta_list.tokens.clone()) {
+                    for ty in types {
+                        let ident = get_type_identifier(&ty);
+                        if seen_types.insert(ident) {
+                            bound_types.extend(quote! {
+                                #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
+                            });
                         }
                     }
                 }
-                _ => continue,
             }
         }
     }
 
     let (_impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let where_clause = if where_clause.is_some() {
-        quote! {#where_clause}
-    } else {
-        quote! {where  }
-    };
-    let (wrapper_impl_generics, wrapper_ty_generics, _) = wrapper_generics.split_for_impl();
+    let where_clause = where_clause.map_or_else(|| quote! { where }, |wc| quote! { #wc });
+    let (wrapper_impl_generics, _, _) = wrapper_generics.split_for_impl();
 
     let expanded = quote! {
-        #[derive(::askama::Template)]
-        #(#template_attrs)*
-        pub struct #wrapper_name #wrapper_generics
-            #where_clause
-            DB: ::sqlx::Database,
-            #bound_types
-        {
-            pub data: &#data_lifetime #name #ty_generics,
-            pub arguments: ::sqlx_askama_template::TemplateArg<#data_lifetime, DB>,
-        }
-
-        impl #wrapper_impl_generics ::std::ops::Deref for #wrapper_name #wrapper_ty_generics
-            #where_clause
-            DB: ::sqlx::Database,
-            #bound_types
-        {
-            type Target = &#data_lifetime #name #ty_generics;
-
-            fn deref(&self) -> &Self::Target {
-                &self.data
-            }
-        }
-
-        impl #wrapper_impl_generics #wrapper_name #wrapper_ty_generics
-            #where_clause
-            DB: ::sqlx::Database,
-            #bound_types
-        {
-            pub fn e<ImplEncode>(&self, arg: ImplEncode) -> ::std::string::String
-            where
-                ImplEncode: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
-            {
-                self.arguments.encode(arg)
-            }
-
-            pub fn el<ImplEncode>(
-                &self,
-                args: impl ::std::iter::IntoIterator<Item = ImplEncode>,
-            ) -> ::std::string::String
-            where
-                ImplEncode: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
-            {
-                self.arguments.encode_list(args.into_iter())
-            }
-
-            pub fn et<ImplEncode>(&self, t: &ImplEncode) -> ::std::string::String
-            where
-                ImplEncode: ::sqlx::Encode<#data_lifetime, DB>
-                    + ::sqlx::Type<DB>
-                    + ::std::clone::Clone
-                    + #data_lifetime,
-            {
-                self.arguments.encode(t.clone())
-            }
-
-            pub fn etl<'arg_b, ImplEncode>(
-                &self,
-                args: impl ::std::iter::IntoIterator<Item = &'arg_b ImplEncode>,
-            ) -> ::std::string::String
-            where
-                #data_lifetime: 'arg_b,
-                ImplEncode: ::sqlx::Encode<#data_lifetime, DB>
-                    + ::sqlx::Type<DB>
-                    + ::std::clone::Clone
-                    + #data_lifetime,
-            {
-                let args = args.into_iter().cloned();
-                self.arguments.encode_list(args)
-            }
-        }
-
         impl #wrapper_impl_generics ::sqlx_askama_template::SqlTemplate<#data_lifetime, DB>
             for &#data_lifetime #name #ty_generics
             #where_clause
             DB: ::sqlx::Database,
             #bound_types
-
         {
             fn render_sql_with_encode_placeholder_fn(
                 self,
                 f: ::std::option::Option<fn(usize, &mut String)>,
+                sql_buffer: &mut String,
             ) -> ::std::result::Result<
-                (
-                    ::std::string::String,
-                    ::std::option::Option<DB::Arguments<#data_lifetime>>,
-                ),
-                ::sqlx_askama_template::Error,
+                ::std::option::Option<DB::Arguments<#data_lifetime>>,
+                ::sqlx::Error,
             > {
-                let mut wrapper: #wrapper_name #wrapper_ty_generics = #wrapper_name {
-                    data: self,
-                    arguments: ::std::default::Default::default(),
-                };
-                if let Some(f)=f{
-                    wrapper.arguments.set_encode_placeholder_fn(f);
-                }
+                #[derive(::sqlx_askama_template::askama::Template)]
+                #[template(#template_attrs)]
+                struct Wrapper #wrapper_generics (
+                    ::sqlx_askama_template::TemplateArg<#data_lifetime, DB, #name #ty_generics>
+                ) #where_clause
+                    DB: ::sqlx::Database,
+                    #bound_types;
 
-                let render_res = ::askama::Template::render(&wrapper);
-                let arg = wrapper.arguments.get_arguments();
-                let encode_err = wrapper.arguments.get_err();
-                match render_res{
-                    ::std::result::Result::Ok(sql)=>{
-                        if let Some(e)=encode_err{
-                            return  ::std::result::Result::Err(e);
-                        }
-
-                        ::std::result::Result::Ok((sql, arg))
-                    }
-                    ::std::result::Result::Err(askama_err)=>{
-                        if let Some(e)=encode_err{
-
-                                if let ::sqlx_askama_template::Error::MultipleErrors(mut error) = e {
-                                    error.push(askama_err.into());
-                                    return ::std::result::Result::Err(::sqlx_askama_template::Error::MultipleErrors(error));
-                                }
-
-                            return  ::std::result::Result::Err(::sqlx_askama_template::Error::MultipleErrors(vec![e,askama_err.into()]));
-                        }
-                        return  ::std::result::Result::Err(askama_err.into());
+                impl #wrapper_impl_generics ::std::ops::Deref for Wrapper #wrapper_generics
+                    #where_clause
+                    DB: ::sqlx::Database,
+                    #bound_types
+                {
+                    type Target = ::sqlx_askama_template::TemplateArg<#data_lifetime, DB, #name #ty_generics>;
+                    fn deref(&self) -> &Self::Target {
+                        &self.0
                     }
                 }
 
+                let mut wrapper = Wrapper(::sqlx_askama_template::TemplateArg::new(self));
+                if let Some(f) = f {
+                    wrapper.0.set_encode_placeholder_fn(f);
+                }
+                let render_res = ::sqlx_askama_template::askama::Template::render_into(&wrapper, sql_buffer)
+                    .map_err(|e| ::sqlx::Error::Encode(::std::boxed::Box::new(e)))?;
+                let arg = wrapper.get_arguments();
+                let encode_err = wrapper.get_err();
+
+                if let Some(e) = encode_err {
+                    return ::std::result::Result::Err(e);
+                }
+                ::std::result::Result::Ok(arg)
             }
         }
     };

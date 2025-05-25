@@ -1,12 +1,13 @@
-use crate::Error;
 use futures_core::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
-use sqlx::{
-    Database, Either, Execute, Executor, FromRow, IntoArguments,
-    database::HasStatementCache,
-    query,
-    query::{Map, Query, QueryAs},
-    query_as, query_as_with, query_with,
+use sqlx_core::{
+    Either, Error,
+    arguments::IntoArguments,
+    database::{Database, HasStatementCache},
+    executor::{Execute, Executor},
+    from_row::FromRow,
+    query::{Map, Query, query, query_with},
+    query_as::{QueryAs, query_as, query_as_with},
 };
 /// Internal executor for SQL templates
 pub struct SqlTemplateExecute<'q, DB: Database> {
@@ -58,7 +59,7 @@ where
     DB: Database + HasStatementCache,
     DB::Arguments<'q>: IntoArguments<'q, DB>,
 {
-    /// to sqlx::QueryAs
+    /// to sqlx_core::QueryAs
     /// Converts the SQL template to a `QueryAs` object, which can be executed to fetch rows
     #[inline]
     pub fn to_query_as<O>(self) -> QueryAs<'q, DB, O, DB::Arguments<'q>>
@@ -71,7 +72,7 @@ where
         };
         q.persistent(self.persistent)
     }
-    /// to sqlx::Query
+    /// to sqlx_core::Query
     /// Converts the SQL template to a `Query` object, which can be executed to fetch rows
     #[inline]
     pub fn to_query(self) -> Query<'q, DB, DB::Arguments<'q>> {
@@ -84,13 +85,13 @@ where
         };
         q.persistent(self.persistent)
     }
-    /// like sqlx::Query::map
+    /// like sqlx_core::Query::map
     /// Map each row in the result to another type.
     #[inline]
     pub fn map<F, O>(
         self,
         f: F,
-    ) -> Map<'q, DB, impl FnMut(DB::Row) -> Result<O, sqlx::Error> + Send, DB::Arguments<'q>>
+    ) -> Map<'q, DB, impl FnMut(DB::Row) -> Result<O, sqlx_core::Error> + Send, DB::Arguments<'q>>
     where
         F: FnMut(DB::Row) -> O + Send,
         O: Unpin,
@@ -98,12 +99,12 @@ where
         self.to_query().map(f)
     }
 
-    /// like sqlx::Query::try_map
+    /// like sqlx_core::Query::try_map
     /// Map each row in the result to another type, returning an error if the mapping fails.
     #[inline]
     pub fn try_map<F, O>(self, f: F) -> Map<'q, DB, F, DB::Arguments<'q>>
     where
-        F: FnMut(DB::Row) -> Result<O, sqlx::Error> + Send,
+        F: FnMut(DB::Row) -> Result<O, sqlx_core::Error> + Send,
         O: Unpin,
     {
         self.to_query().try_map(f)
@@ -113,7 +114,7 @@ impl<'q, DB> SqlTemplateExecute<'q, DB>
 where
     DB: Database,
 {
-    /// like sqlx::Query::execute
+    /// like sqlx_core::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
     pub async fn execute<'e, 'c: 'e, E>(self, executor: E) -> Result<DB::QueryResult, Error>
@@ -121,12 +122,12 @@ where
         'q: 'e,
         E: Executor<'c, Database = DB>,
     {
-        Ok(executor.execute(self).await?)
+        executor.execute(self).await
     }
-    /// like    sqlx::Query::execute_many
+    /// like    sqlx_core::Query::execute_many
     /// Execute multiple queries and return the rows affected from each query, in a stream.
     #[inline]
-    pub async fn execute_many<'e, 'c: 'e, E>(
+    pub fn execute_many<'e, 'c: 'e, E>(
         self,
         executor: E,
     ) -> BoxStream<'e, Result<DB::QueryResult, Error>>
@@ -135,9 +136,9 @@ where
         E: Executor<'c, Database = DB>,
     {
         #[allow(deprecated)]
-        executor.execute_many(self).map_err(|e| e.into()).boxed()
+        executor.execute_many(self)
     }
-    /// like sqlx::Query::fetch
+    /// like sqlx_core::Query::fetch
     /// Execute the query and return the generated results as a stream.
     #[inline]
     pub fn fetch<'e, 'c: 'e, E>(self, executor: E) -> BoxStream<'e, Result<DB::Row, Error>>
@@ -145,9 +146,9 @@ where
         'q: 'e,
         E: Executor<'c, Database = DB>,
     {
-        executor.fetch(self).map_err(|e| e.into()).boxed()
+        executor.fetch(self)
     }
-    /// like sqlx::Query::fetch_many
+    /// like sqlx_core::Query::fetch_many
     /// Execute multiple queries and return the generated results as a stream.
     ///
     /// For each query in the stream, any generated rows are returned first,
@@ -163,13 +164,9 @@ where
         E: Executor<'c, Database = DB>,
     {
         #[allow(deprecated)]
-        executor
-            .fetch_many(self)
-            //.await
-            .map_err(|e| e.into())
-            .boxed()
+        executor.fetch_many(self)
     }
-    /// like sqlx::Query::fetch_all
+    /// like sqlx_core::Query::fetch_all
     /// Execute the query and return all the resulting rows collected into a [`Vec`].
     ///
     /// ### Note: beware result set size.
@@ -183,9 +180,9 @@ where
         'q: 'e,
         E: Executor<'c, Database = DB>,
     {
-        Ok(executor.fetch_all(self).await?)
+        executor.fetch_all(self).await
     }
-    /// like sqlx::Query::fetch_one
+    /// like sqlx_core::Query::fetch_one
     /// Execute the query, returning the first row or [`Error::RowNotFound`] otherwise.
     ///
     /// ### Note: for best performance, ensure the query returns at most one row.
@@ -204,9 +201,9 @@ where
         'q: 'e,
         E: Executor<'c, Database = DB>,
     {
-        Ok(executor.fetch_one(self).await?)
+        executor.fetch_one(self).await
     }
-    /// like sqlx::Query::fetch_optional
+    /// like sqlx_core::Query::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
     ///
     /// ### Note: for best performance, ensure the query returns at most one row.
@@ -225,12 +222,12 @@ where
         'q: 'e,
         E: Executor<'c, Database = DB>,
     {
-        Ok(executor.fetch_optional(self).await?)
+        executor.fetch_optional(self).await
     }
 
     // QueryAs functions wrapp
 
-    /// like sqlx::QueryAs::fetch
+    /// like sqlx_core::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
     pub fn fetch_as<'e, 'c: 'e, O, E>(self, executor: E) -> BoxStream<'e, Result<O, Error>>
     where
@@ -243,7 +240,7 @@ where
             .try_filter_map(|step| async move { Ok(step.right()) })
             .boxed()
     }
-    /// like sqlx::QueryAs::fetch_many
+    /// like sqlx_core::QueryAs::fetch_many
     /// Execute multiple queries and return the generated results as a stream
     /// from each query, in a stream.
     pub fn fetch_many_as<'e, 'c: 'e, O, E>(
@@ -260,15 +257,13 @@ where
         executor
             .fetch_many(self)
             .map(|v| match v {
-                Ok(Either::Right(row)) => O::from_row(&row)
-                    .map_err(Error::SqlxError)
-                    .map(Either::Right),
+                Ok(Either::Right(row)) => O::from_row(&row).map(Either::Right),
                 Ok(Either::Left(v)) => Ok(Either::Left(v)),
-                Err(e) => Err(Error::SqlxError(e)),
+                Err(e) => Err(e),
             })
             .boxed()
     }
-    /// like sqlx::QueryAs::fetch_all
+    /// like sqlx_core::QueryAs::fetch_all
     /// Execute the query and return all the resulting rows collected into a [`Vec`].
     ///
     /// ### Note: beware result set size.
@@ -286,7 +281,7 @@ where
     {
         self.fetch_as(executor).try_collect().await
     }
-    /// like sqlx::QueryAs::fetch_one
+    /// like sqlx_core::QueryAs::fetch_one
     /// Execute the query, returning the first row or [`Error::RowNotFound`] otherwise.
     ///
     /// ### Note: for best performance, ensure the query returns at most one row.
@@ -308,9 +303,9 @@ where
     {
         self.fetch_optional_as(executor)
             .await
-            .and_then(|row| row.ok_or(Error::SqlxError(sqlx::Error::RowNotFound)))
+            .and_then(|row| row.ok_or(sqlx_core::Error::RowNotFound))
     }
-    /// like sqlx::QueryAs::fetch_optional
+    /// like sqlx_core_core::QueryAs::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
     ///
     /// ### Note: for best performance, ensure the query returns at most one row.
@@ -332,7 +327,7 @@ where
     {
         let row = executor.fetch_optional(self).await?;
         if let Some(row) = row {
-            O::from_row(&row).map_err(|e| e.into()).map(Some)
+            O::from_row(&row).map(Some)
         } else {
             Ok(None)
         }
@@ -354,7 +349,9 @@ impl<'q, DB: Database> Execute<'q, DB> for SqlTemplateExecute<'q, DB> {
 
     /// Takes ownership of the bound arguments
     #[inline]
-    fn take_arguments(&mut self) -> Result<Option<DB::Arguments<'q>>, sqlx::error::BoxDynError> {
+    fn take_arguments(
+        &mut self,
+    ) -> Result<Option<DB::Arguments<'q>>, sqlx_core::error::BoxDynError> {
         Ok(self.arguments.take())
     }
 
