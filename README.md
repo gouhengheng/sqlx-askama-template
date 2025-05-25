@@ -23,10 +23,9 @@ Add to `Cargo.toml`:
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.2"  
-sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }  
-askama = "0.13.0"  
-tokio = { version = "1.0", features = ["full"] }  
+sqlx-askama-template = "0.3"
+sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
+tokio = { version = "1.0", features = ["full"] }
 ```  
 
 ## Quick Start  
@@ -45,17 +44,14 @@ struct User {
     name: String,
 }
 #[derive(SqlTemplate)]
-#[template(
-    ext = "txt",
-    source = r#"
+#[template(source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
     union all 
     {% let id=99999_i64 %}
     {% let name="super man" %}
     select {{et(id)}} as id,{{et(name)}} as name
-"#
-)]
-#[addtype(&'q str)]
+"#)]
+#[add_type(&'q str)]
 pub struct UserQuery {
     pub user_id: i64,
     pub user_name: String,
@@ -82,9 +78,7 @@ async fn main() -> sqlx::Result<()> {
 
     let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
     let mut sql_buff = String::new();
-    let execute = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+    let execute = user_query.render_execute_able(&mut sql_buff)?;
 
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
@@ -98,8 +92,7 @@ async fn main() -> sqlx::Result<()> {
     let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
     let mut sql_buff = String::new();
     let rows = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?
+        .render_db_adapter_manager(&mut sql_buff)
         .fetch_all(&pool)
         .await?;
 
@@ -115,17 +108,138 @@ async fn main() -> sqlx::Result<()> {
 
     let mut sql_buff = String::new();
     let db_users: Vec<User> = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?
+        .render_db_adapter_manager(&mut sql_buff)
         .set_persistent(false)
+        .set_page(1, 1)
         .fetch_all_as(&pool)
         .await?;
 
-    assert_eq!(db_users, users);
+    assert_eq!(db_users, users[0..1]);
     Ok(())
 }
 
 ```  
+
+### Database adapter
+
+```rust
+use sqlx::postgres::PgListener;
+use sqlx::{AnyPool, Error, any::install_default_drivers};
+use sqlx::{MySqlPool, PgPool, SqlitePool};
+
+use sqlx_askama_template::{DBType, backend_db};
+
+async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
+    install_default_drivers();
+    for (db_type, url) in urls {
+        let pool = AnyPool::connect(url).await?;
+        // pool
+        let (get_db_type, get_conn) = backend_db(&pool).await?;
+        assert_eq!(db_type, get_db_type);
+        assert!(get_conn.is_right());
+
+        // connection
+        let mut conn = pool.acquire().await?;
+        let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+        assert_eq!(db_type, get_db_type);
+        assert!(get_conn.is_left());
+
+        // tx
+        let mut conn = pool.begin().await?;
+        let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+        assert_eq!(db_type, get_db_type);
+        assert!(get_conn.is_left());
+
+        match db_type {
+            DBType::MySQL => {
+                //mysql  DBType::MySQL, "mysql://root:root@localhost/mysql"
+                let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
+                // pool
+                let (get_db_type, get_conn) = backend_db(&pool).await?;
+                assert_eq!(DBType::MySQL, get_db_type);
+                assert!(get_conn.is_left());
+
+                // connection
+                let mut conn = pool.acquire().await?;
+                let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+                assert_eq!(DBType::MySQL, get_db_type);
+                assert!(get_conn.is_left());
+
+                //
+                let mut conn = pool.begin().await?;
+                let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+                assert_eq!(DBType::MySQL, get_db_type);
+                assert!(get_conn.is_left());
+            }
+            DBType::PostgreSQL => {
+                //pg
+                let pool = PgPool::connect(url).await?;
+                // pool
+                let (get_db_type, get_conn) = backend_db(&pool).await?;
+                assert_eq!(DBType::PostgreSQL, get_db_type);
+                assert!(get_conn.is_left());
+
+                // connection
+                let mut conn = pool.acquire().await?;
+                let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+                assert_eq!(DBType::PostgreSQL, get_db_type);
+                assert!(get_conn.is_left());
+
+                // tx
+                let mut conn = pool.begin().await?;
+                let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+                assert_eq!(DBType::PostgreSQL, get_db_type);
+                assert!(get_conn.is_left());
+
+                // listener
+                let mut listener = PgListener::connect(url).await?;
+                let (get_db_type, get_conn) = backend_db(&mut listener).await?;
+                assert_eq!(DBType::PostgreSQL, get_db_type);
+                assert!(get_conn.is_left());
+            }
+            DBType::SQLite => {
+                //sqlite DBType::SQLite, "sqlite://db.file?mode=memory"
+                let pool = SqlitePool::connect(url).await?;
+                // pool
+                let (get_db_type, get_conn) = backend_db(&pool).await?;
+                assert_eq!(DBType::SQLite, get_db_type);
+                assert!(get_conn.is_left());
+
+                // connection
+                let mut conn = pool.acquire().await?;
+                let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+                assert_eq!(DBType::SQLite, get_db_type);
+                assert!(get_conn.is_left());
+
+                // tx
+                let mut conn = pool.begin().await?;
+                let (get_db_type, get_conn) = backend_db(&mut *conn).await?;
+                assert_eq!(DBType::SQLite, get_db_type);
+                assert!(get_conn.is_left());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let urls = vec![
+        (
+            DBType::PostgreSQL,
+            "postgres://postgres:postgres@localhost/postgres",
+        ),
+        (DBType::SQLite, "sqlite://db.file?mode=memory"),
+        (DBType::MySQL, "mysql://root:root@localhost/mysql"),
+    ];
+    test_backend(urls).await?;
+
+    Ok(())
+}
+
+
+```
 
 ## Core Features  
 

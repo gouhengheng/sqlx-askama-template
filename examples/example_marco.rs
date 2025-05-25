@@ -72,7 +72,7 @@ async fn simple_query() -> Result<(), Error> {
 
     let mut sql_buff = String::new();
     let db_users: Vec<User> = user_query
-        .render_execute_able(&mut sql_buff)?
+        .render_db_adapter_manager(&mut sql_buff)
         .set_persistent(false)
         .fetch_all_as(&pool)
         .await?;
