@@ -30,7 +30,7 @@ fn process_template_attr(input: &DeriveInput) -> Punctuated<Meta, Token![,]> {
             Ok(n) => n,
             Err(_) => continue,
         };
-        for meta in &nested {
+        for meta in nested {
             if meta.path().is_ident("source") {
                 has_source = true;
             }
@@ -40,7 +40,7 @@ fn process_template_attr(input: &DeriveInput) -> Punctuated<Meta, Token![,]> {
             if meta.path().is_ident("askama") {
                 has_askama = true;
             }
-            args.push(meta.clone());
+            args.push(meta);
         }
 
         // 设置默认值

@@ -12,8 +12,8 @@ struct User {
 #[template(ext="html",askama=askama,source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
     union all 
-    {% let id=99999_i64 %}
-    {% let name="super man" %}
+    {%- let id=99999_i64 %}
+    {%- let name="super man" %}
     select {{et(id)}} as id,{{et(name)}} as name
 "#)]
 #[add_type(&'q str)]
@@ -85,27 +85,27 @@ async fn simple_query() -> Result<(), Error> {
 #[add_type(Option<&'a i64>,bool)]
 #[template(
     source = r#"
-    {% let v="abc".to_string() %}
+    {%- let v="abc".to_string() %}
     SELECT {{et(v)}} as v,t.* FROM table t
     WHERE arg1 = {{e(arg1)}}
       AND arg2 = {{e(arg2)}}
       AND arg3 = {{e(arg3)}}
       AND arg4 = {{e(arg4.first())}}
       AND arg5 = {{e(arg5.get(&0))}}
-      {% let v2=3_i64 %}
+      {%- let v2=3_i64 %}
       AND arg6 = {{et(v2)}}
-      {% let v3="abc".to_string() %}
+      {%- let v3="abc".to_string() %}
       AND arg7 = {{et(v3)}}
       AND arg_list1 in {{el(arg4)}}
-      {% let list=["abc".to_string()] %}
+      {%- let list=["abc".to_string()] %}
       AND arg_temp_list1 in {{etl(*list)}}
       AND arg_list2 in {{el(arg5.values())}}
-      {% if let Some(first) = arg4.first() %}
+      {%- if let Some(first) = arg4.first() %}
         AND arg_option = {{et(**first)}}
-      {% endif %}
-      {% if let Some(first) = arg5.get(&0) %}
+      {%- endif %}
+      {%- if let Some(first) = arg5.get(&0) %}
         AND arg_option1 = {{et(**first)}}
-      {% endif %}     
+      {%- endif %}     
 "#,
     print = "all"
 )]
@@ -128,7 +128,7 @@ where
 
 #[derive(SqlTemplate)]
 #[template(source = r#"
-    {% let status_list = ["active", "pending"] %}
+    {%- let status_list = ["active", "pending"] %}
     SELECT 
         u.id,
         u.name,
@@ -136,12 +136,12 @@ where
     FROM users u
     LEFT JOIN orders o ON u.id = o.user_id
     WHERE 1=1
-    {% if let Some(min_age) = min_age %}
+    {%- if let Some(min_age) = min_age %}
         AND age >= {{et(min_age)}}
-    {% endif %}
-    {% if filter_names.len()>0 %}
+    {%- endif %}
+    {%- if filter_names.len()>0 %}
         AND name IN {{el(filter_names)}}
-    {% endif %}
+    {%- endif %}
     AND status IN {{etl(*status_list)}}
     GROUP BY u.id
     ORDER BY {{order_field}}

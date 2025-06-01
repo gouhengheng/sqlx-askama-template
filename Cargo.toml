@@ -1,6 +1,6 @@
 [package]
 name = "sqlx-askama-template"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license = "Apache-2.0"
 description = "Type-safe SQL templates with Askama and SQLx"
@@ -17,8 +17,8 @@ members = [".", "sqlx-askama-template-macro"]
 
 sqlx-core = { version = "0.8", default-features = false, features = ["any"] }
 #sqlx-askama-template-macro = { path = "./sqlx-askama-template-macro" }
-sqlx-askama-template-macro = "0.3"
-askama = "0.13.0"
+sqlx-askama-template-macro = "0.2"
+askama = "0.14.0"
 futures-core = "0.3.31"
 thiserror = "2.0.12"
 futures-util = "0.3.31"

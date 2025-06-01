@@ -7,13 +7,10 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use crate::SqlTemplate;
 use sqlx_core::{
     Either, Error, database::Database, encode::Encode, executor::Executor, from_row::FromRow,
-    pool::PoolConnection, try_stream, types::Type,
+    types::Type,
 };
 
-use super::{
-    db_type::{DBBackend, DBType},
-    sql_templte_execute::SqlTemplateExecute,
-};
+use super::{DatabaseDialect, db_adapter::BackendDB, sql_templte_execute::SqlTemplateExecute};
 
 /// Pagination metadata container
 #[derive(Debug)]
@@ -88,7 +85,6 @@ where
     DB: Database,
     T: SqlTemplate<'q, DB>,
     i64: Encode<'q, DB> + Type<DB>,
-    for<'c> &'c mut DB::Connection: Executor<'c, Database = DB>,
 {
     /// Configures query persistence (default: true)
     pub fn set_persistent(mut self, persistent: bool) -> Self {
@@ -102,7 +98,7 @@ where
     #[inline]
     pub async fn count<'c, Adapter>(self, db_adapter: Adapter) -> Result<i64, Error>
     where
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
         (i64,): for<'r> FromRow<'r, DB::Row>,
         'q: 'c,
     {
@@ -113,18 +109,8 @@ where
         db_type.write_count_sql(&mut sql);
         *sql_buff = sql;
         let execute = SqlTemplateExecute::new(&*sql_buff, arg).set_persistent(self.persistent);
-        match executor {
-            Either::Left(conn) => {
-                let (count,): (i64,) = execute.fetch_one_as(conn).await?;
-
-                Ok(count)
-            }
-            Either::Right(mut conn) => {
-                let (count,): (i64,) = execute.fetch_one_as(&mut *conn).await?;
-
-                Ok(count)
-            }
-        }
+        let (count,): (i64,) = execute.fetch_one_as(executor).await?;
+        Ok(count)
     }
     /// Calculates complete pagination metadata
     ///
@@ -139,7 +125,7 @@ where
         db_adapter: Adapter,
     ) -> Result<PageInfo, Error>
     where
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
         (i64,): for<'r> FromRow<'r, DB::Row>,
         'q: 'c,
     {
@@ -165,14 +151,14 @@ where
         (
             String,
             Option<DB::Arguments<'q>>,
-            DBType,
-            Either<impl Executor<'c, Database = DB>, PoolConnection<DB>>,
+            impl DatabaseDialect,
+            impl Executor<'c, Database = DB>,
         ),
         Error,
     >
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         let (db_type, executor) = db_adapter.backend_db().await?;
         let f = db_type.get_encode_placeholder_fn();
@@ -196,7 +182,7 @@ where
     ) -> Result<DB::QueryResult, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.execute_many(db_adapter).await.try_collect().await
     }
@@ -211,7 +197,7 @@ where
     where
         'q: 'c,
         'c: 'e,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.fetch_many(db_adapter)
             .await
@@ -234,7 +220,7 @@ where
     where
         'q: 'c,
         'c: 'e,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.fetch_many(db_adapter)
             .await
@@ -260,7 +246,7 @@ where
     where
         'q: 'c,
         'c: 'e,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         let sql_buff = self.sql_buff;
         let res =
@@ -271,20 +257,7 @@ where
                 *sql_buff = sql;
                 let execute =
                     SqlTemplateExecute::new(&*sql_buff, arg).set_persistent(self.persistent);
-
-                match executor {
-                    Either::Left(conn) => execute.fetch_many(conn),
-                    Either::Right(mut conn) => Box::pin(try_stream! {
-
-                        let mut s = conn.fetch_many(execute);
-
-                        while let Some(v) = s.try_next().await? {
-                            r#yield!(v);
-                        }
-
-                        Ok(())
-                    }),
-                }
+                execute.fetch_many(executor)
             }
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         }
@@ -302,7 +275,7 @@ where
     pub async fn fetch_all<'c, Adapter>(self, db_adapter: Adapter) -> Result<Vec<DB::Row>, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.fetch(db_adapter).await.try_collect().await
     }
@@ -323,7 +296,7 @@ where
     pub async fn fetch_one<'c, Adapter>(self, db_adapter: Adapter) -> Result<DB::Row, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.fetch_optional(db_adapter)
             .await
@@ -353,7 +326,7 @@ where
     ) -> Result<Option<DB::Row>, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.fetch(db_adapter).await.try_next().await
     }
@@ -368,7 +341,7 @@ where
     where
         'q: 'c,
         'c: 'e,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         self.fetch_many_as(db_adapter)
@@ -381,14 +354,13 @@ where
     /// from each query, in a stream.
     pub async fn fetch_many_as<'c, 'e, Adapter, O>(
         self,
-
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
         'q: 'c,
         'c: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
     {
         self.fetch_many(db_adapter)
             .await
@@ -411,7 +383,7 @@ where
     pub async fn fetch_all_as<'c, Adapter, O>(self, db_adapter: Adapter) -> Result<Vec<O>, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         self.fetch_as(db_adapter).await.try_collect().await
@@ -432,7 +404,7 @@ where
     pub async fn fetch_one_as<'c, Adapter, O>(self, db_adapter: Adapter) -> Result<O, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         self.fetch_optional_as(db_adapter)
@@ -459,7 +431,7 @@ where
     ) -> Result<Option<O>, Error>
     where
         'q: 'c,
-        Adapter: DBBackend<'c, DB>,
+        Adapter: BackendDB<'c, DB>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         let row = self.fetch_optional(db_adapter).await?;
