@@ -20,7 +20,7 @@ sqlx-core = { version = "0.8", default-features = false, features = ["any"] }
 sqlx-askama-template-macro = "0.2"
 askama = "0.14.0"
 futures-core = "0.3.31"
-thiserror = "2.0.12"
+
 futures-util = "0.3.31"
 tracing = { version = "0.1" }
 

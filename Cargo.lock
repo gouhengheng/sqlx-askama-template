@@ -1136,7 +1136,6 @@ dependencies = [
  "sqlx",
  "sqlx-askama-template-macro 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "sqlx-core",
- "thiserror",
  "tokio",
  "tracing",
 ]

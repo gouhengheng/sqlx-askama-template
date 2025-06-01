@@ -23,7 +23,7 @@ Add to `Cargo.toml`:
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.3"
+sqlx-askama-template = "0.3.1"
 sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
 tokio = { version = "1.0", features = ["full"] }
 ```  
