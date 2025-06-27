@@ -45,7 +45,7 @@ async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
         match db_type {
             DBType::MySQL => {
                 //mysql  DBType::MySQL, "mysql://root:root@localhost/mysql"
-                let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
+                let pool = MySqlPool::connect(url).await?;
                 // pool
                 let (get_db_type, _get_conn) = pool.backend_db().await?;
                 assert_eq!(DBType::MySQL.backend_name(), get_db_type.backend_name());
@@ -130,13 +130,13 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
 
     let count = db_adatper.count(&pool).await?;
     assert_eq!(2, count);
-    println!("{}", sql_buff);
+    println!("{sql_buff}");
 
     // test page
     let db_adatper = user_query.render_db_adapter_manager(&mut sql_buff);
     let user: Option<User> = db_adatper.set_page(1, 1).fetch_optional_as(&pool).await?;
 
-    println!("{:?}", user);
+    println!("{user:?}");
 
     let pool = AnyPool::connect(url).await?;
     let user: Vec<User> = user_query
@@ -144,22 +144,22 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         .set_page(1, 2)
         .fetch_all_as(&pool)
         .await?;
-    println!("{}", sql_buff);
-    println!("{:?}", user);
+    println!("{sql_buff}");
+    println!("{user:?}");
 
     let page_info = user_query
         .render_db_adapter_manager(&mut sql_buff)
         .count_page(1, &pool)
         .await?;
-    println!("{}", sql_buff);
-    println!("{:?}", page_info);
+    println!("{sql_buff}");
+    println!("{page_info:?}");
     //fecth
     let user: Vec<User> = user_query
         .render_db_adapter_manager(&mut sql_buff)
         .fetch_all_as(&pool)
         .await?;
-    println!("{}", sql_buff);
-    println!("{:?}", user);
+    println!("{sql_buff}");
+    println!("{user:?}");
     Ok(())
 }
 #[tokio::main]

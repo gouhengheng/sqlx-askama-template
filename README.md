@@ -80,7 +80,7 @@ async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
         match db_type {
             DBType::MySQL => {
                 //mysql  DBType::MySQL, "mysql://root:root@localhost/mysql"
-                let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
+                let pool = MySqlPool::connect(url).await?;
                 // pool
                 let (get_db_type, _get_conn) = pool.backend_db().await?;
                 assert_eq!(DBType::MySQL.backend_name(), get_db_type.backend_name());

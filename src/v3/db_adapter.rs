@@ -83,7 +83,7 @@ impl DBType {
             "PostgreSQL" => Ok(Self::PostgreSQL),
             "MySQL" => Ok(Self::MySQL),
             "SQLite" => Ok(Self::SQLite),
-            _ => Err(Error::Protocol(format!("unsupport db `{}`", db_name))),
+            _ => Err(Error::Protocol(format!("unsupport db `{db_name}`"))),
         }
     }
 }
@@ -106,7 +106,7 @@ impl DatabaseDialect for DBType {
     /// Option<fn(usize, &mut String)> placeholder generation function
     fn get_encode_placeholder_fn(&self) -> Option<fn(usize, &mut String)> {
         match self {
-            Self::PostgreSQL => Some(|i: usize, s: &mut String| s.push_str(&format!("${}", i))),
+            Self::PostgreSQL => Some(|i: usize, s: &mut String| s.push_str(&format!("${i}"))),
             Self::MySQL | Self::SQLite => Some(|_: usize, s: &mut String| s.push('?')),
         }
     }
@@ -153,7 +153,7 @@ impl DatabaseDialect for DBType {
     }
 }
 fn pg_mysql_sqlite_count_sql(sql: &mut String) {
-    *sql = format!("select count(1) from ({}) t", sql)
+    *sql = format!("select count(1) from ({sql}) t")
 }
 fn pg_mysql_sqlite_page_sql<'c, 'q, DB>(
     sql: &mut String,
@@ -212,11 +212,11 @@ pub trait BackendDB<'c, DB>
 where
     DB: Database,
 {
+    type Executor: Executor<'c, Database = DB> + 'c;
+    type DatabaseDialect: DatabaseDialect;
     fn backend_db(
         self,
-    ) -> impl std::future::Future<
-        Output = Result<(impl DatabaseDialect, impl Executor<'c, Database = DB> + 'c), Error>,
-    > + Send;
+    ) -> impl std::future::Future<Output = Result<(Self::DatabaseDialect, Self::Executor), Error>> + Send;
 }
 impl<'c, DB, C, C1> BackendDB<'c, DB> for C
 where
@@ -225,9 +225,9 @@ where
     C1: Any,
     for<'c1> &'c1 mut DB::Connection: Executor<'c1, Database = DB>,
 {
-    async fn backend_db(
-        self,
-    ) -> Result<(impl DatabaseDialect, impl Executor<'c, Database = DB> + 'c), Error> {
+    type DatabaseDialect = DBType;
+    type Executor = AdapterExecutor<'c, DB, C>;
+    async fn backend_db(self) -> Result<(Self::DatabaseDialect, Self::Executor), Error> {
         backend_db(self).await
     }
 }
