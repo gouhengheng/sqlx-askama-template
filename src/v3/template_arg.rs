@@ -56,10 +56,10 @@ impl<'q, DB: Database, D> TemplateArg<'q, DB, D> {
         let mut arguments = self.arguments.borrow_mut().take().unwrap_or_default();
         let mut err = self.error.borrow_mut();
 
-        if let Err(encode_err) = arguments.add(t) {
-            if err.is_none() {
-                *err = Some(Error::Encode(encode_err));
-            }
+        if let Err(encode_err) = arguments.add(t)
+            && err.is_none()
+        {
+            *err = Some(Error::Encode(encode_err));
         }
 
         let mut placeholder = String::new();

@@ -18,6 +18,7 @@ use sqlx_core::{
 /// Provides a unified interface for handling database-specific SQL syntax variations,
 /// particularly for parameter binding, count queries, and pagination.
 pub trait DatabaseDialect {
+    /// Returns the name of the database backend in use (e.g. PostgreSQL, MySQL, SQLite, etc.)
     fn backend_name(&self) -> &str;
     /// Gets placeholder generation function for parameter binding
     ///

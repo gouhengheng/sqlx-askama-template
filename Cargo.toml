@@ -17,12 +17,13 @@ members = [".", "sqlx-askama-template-macro"]
 
 sqlx-core = { version = "0.8", default-features = false, features = ["any"] }
 #sqlx-askama-template-macro = { path = "./sqlx-askama-template-macro" }
-sqlx-askama-template-macro = "0.2"
+sqlx-askama-template-macro = "0.2.1"
 askama = "0.14.0"
 futures-core = "0.3.31"
 
 futures-util = "0.3.31"
 tracing = { version = "0.1" }
+log = "0.4.27"
 
 [dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }

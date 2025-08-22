@@ -18,10 +18,9 @@ struct User {
     {%- let name="super man" %}
     select {{et(id)}} as id,{{et(name)}} as name
 "#)]
-#[add_type(&'q str)]
-pub struct UserQuery {
+pub struct UserQuery<'a> {
     pub user_id: i64,
-    pub user_name: String,
+    pub user_name: &'a str,
 }
 
 async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
@@ -120,46 +119,59 @@ async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
 
 async fn test_adapter_query(url: &str) -> Result<(), Error> {
     //  test count
-    let user_query = UserQuery {
+    let mut user_query = UserQuery {
         user_id: 1,
-        user_name: "admin".to_string(),
+        user_name: "admin",
     };
-    let mut sql_buff = String::new();
-    let db_adatper = user_query.render_db_adapter_manager(&mut sql_buff);
     let pool = AnyPool::connect(url).await?;
+
+    let mut db_adatper = user_query.adapter_render();
 
     let count = db_adatper.count(&pool).await?;
     assert_eq!(2, count);
-    println!("{sql_buff}");
 
-    // test page
-    let db_adatper = user_query.render_db_adapter_manager(&mut sql_buff);
-    let user: Option<User> = db_adatper.set_page(1, 1).fetch_optional_as(&pool).await?;
+    // test pagination
+    let user: Option<User> = user_query
+        .adapter_render()
+        .set_page(1, 1)
+        .fetch_optional_as(&pool)
+        .await?;
 
     println!("{user:?}");
 
-    let pool = AnyPool::connect(url).await?;
+    let mut conn = pool.acquire().await?;
     let user: Vec<User> = user_query
-        .render_db_adapter_manager(&mut sql_buff)
+        .adapter_render()
         .set_page(1, 2)
-        .fetch_all_as(&pool)
+        .fetch_all_as(&mut *conn)
         .await?;
-    println!("{sql_buff}");
+
     println!("{user:?}");
 
-    let page_info = user_query
-        .render_db_adapter_manager(&mut sql_buff)
-        .count_page(1, &pool)
-        .await?;
-    println!("{sql_buff}");
+    let page_info = user_query.adapter_render().count_page(1, &pool).await?;
+
     println!("{page_info:?}");
     //fecth
-    let user: Vec<User> = user_query
-        .render_db_adapter_manager(&mut sql_buff)
-        .fetch_all_as(&pool)
-        .await?;
-    println!("{sql_buff}");
+    let mut tx = pool.begin().await?;
+    let user: Vec<User> = user_query.adapter_render().fetch_all_as(&mut *tx).await?;
+
     println!("{user:?}");
+
+    let users: Vec<User> = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_all_as(&mut *tx)
+    .await?;
+    tx.rollback().await?;
+    println!("{:?}", users);
+    user_query.user_id = 2;
+    user_query.user_name = "user";
+
+    let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
+    println!("{:?}", users);
+
     Ok(())
 }
 #[tokio::main]
@@ -170,7 +182,7 @@ async fn main() -> Result<(), Error> {
             "postgres://postgres:postgres@localhost/postgres",
         ),
         (DBType::SQLite, "sqlite://db.file?mode=memory"),
-        (DBType::MySQL, "mysql://root:root@localhost/mysql"),
+        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
     ];
     test_backend(urls).await?;
 

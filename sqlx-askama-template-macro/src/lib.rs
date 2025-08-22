@@ -136,18 +136,17 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
 
     // 处理addtype属性
     for attr in &input.attrs {
-        if attr.path().is_ident("add_type") {
-            if let Meta::List(meta_list) = &attr.meta {
-                let parser =
-                    syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated;
-                if let Ok(types) = parser.parse2(meta_list.tokens.clone()) {
-                    for ty in types {
-                        let ident = get_type_identifier(&ty);
-                        if seen_types.insert(ident) {
-                            bound_types.extend(quote! {
+        if attr.path().is_ident("add_type")
+            && let Meta::List(meta_list) = &attr.meta
+        {
+            let parser = syn::punctuated::Punctuated::<syn::Type, syn::Token![,]>::parse_terminated;
+            if let Ok(types) = parser.parse2(meta_list.tokens.clone()) {
+                for ty in types {
+                    let ident = get_type_identifier(&ty);
+                    if seen_types.insert(ident) {
+                        bound_types.extend(quote! {
                                 #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
                             });
-                        }
                     }
                 }
             }

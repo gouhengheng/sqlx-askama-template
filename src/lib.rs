@@ -9,10 +9,22 @@ pub use v3::*;
 /// SQL template trait
 ///
 /// Defines basic operations for rendering SQL from templates
-pub trait SqlTemplate<'q, DB>: Sized
+pub trait SqlTemplate<'q, DB>: Sized + Clone
 where
     DB: Database,
 {
+    /// Renders the SQL template using a custom placeholder encoding function
+    ///
+    /// Writes the rendered SQL to the provided buffer and handles parameter encoding.
+    /// The placeholder function (if provided) formats parameter placeholders (e.g., $1, ?)
+    /// based on their index.
+    ///
+    /// # Parameters
+    /// - `f`: Optional function to format parameter placeholders (receives index and buffer)
+    /// - `sql_buffer`: Mutable string buffer to store the rendered SQL
+    ///
+    /// # Returns
+    /// Encoded database arguments (None if no parameters) or an error if rendering fails
     fn render_sql_with_encode_placeholder_fn(
         self,
         f: Option<fn(usize, &mut String)>,
@@ -26,7 +38,7 @@ where
     }
 
     /// Renders SQL template and returns executable query result
-    fn render_execute_able(
+    fn render_executeable(
         self,
         sql_buffer: &'q mut String,
     ) -> Result<SqlTemplateExecute<'q, DB>, Error> {
@@ -40,7 +52,21 @@ where
             persistent: true,
         })
     }
-    fn render_db_adapter_manager(self, sql_buff: &'q mut String) -> DBAdapterManager<'q, DB, Self> {
-        DBAdapterManager::new(self, sql_buff)
+    #[deprecated(note = "use `adapter_render` instead")]
+    fn render_db_adapter_manager(
+        self,
+        _sql_buff: &'q mut String,
+    ) -> DBAdapterManager<'q, DB, Self> {
+        self.adapter_render()
+    }
+    /// Creates a database adapter manager for the template
+    ///
+    /// Provides an adapter pattern interface for managing template rendering
+    /// in database-specific scenarios.
+    ///
+    /// # Returns
+    /// A new `DBAdapterManager` instance wrapping the template
+    fn adapter_render(self) -> DBAdapterManager<'q, DB, Self> {
+        DBAdapterManager::new(self)
     }
 }
