@@ -38,7 +38,7 @@ where
     }
 
     /// Renders SQL template and returns executable query result
-    fn render_executeable(
+    fn render_executable(
         self,
         sql_buffer: &'q mut String,
     ) -> Result<SqlTemplateExecute<'q, DB>, Error> {

@@ -10,7 +10,7 @@ use sqlx_core::{
     types::Type,
 };
 
-use super::{DatabaseDialect, db_adapter::BackendDB, sql_templte_execute::SqlTemplateExecute};
+use super::{DatabaseDialect, db_adapter::BackendDB, sql_template_execute::SqlTemplateExecute};
 
 /// Pagination metadata container
 #[derive(Debug)]
@@ -105,7 +105,7 @@ where
         Adapter: BackendDB<'c, DB>,
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
-        let (mut sql, arg, db_type, executor) = Self::render_adapter_sql(
+        let (mut sql, arg, db_type, executor) = Self::render_sql_with_adapter(
             self.template.clone(),
             db_adapter,
             self.page_no,
@@ -147,7 +147,7 @@ where
     }
     /// Core SQL rendering method with pagination support
     #[inline]
-    pub async fn render_adapter_sql<'c, Adapter>(
+    pub async fn render_sql_with_adapter<'c, Adapter>(
         template: T,
 
         db_adapter: Adapter,
@@ -252,7 +252,7 @@ where
         'q: 'e,
         Adapter: BackendDB<'c, DB>,
     {
-        let res = Self::render_adapter_sql(
+        let res = Self::render_sql_with_adapter(
             self.template.clone(),
             db_adapter,
             self.page_no,

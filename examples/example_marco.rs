@@ -42,7 +42,7 @@ async fn simple_query() -> Result<(), Error> {
 
     let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
     let mut sql_buff = String::new();
-    let execute = user_query.render_executeable(&mut sql_buff)?;
+    let execute = user_query.render_executable(&mut sql_buff)?;
 
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
@@ -56,7 +56,7 @@ async fn simple_query() -> Result<(), Error> {
     let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
     let mut sql_buff = String::new();
     let rows = user_query
-        .render_executeable(&mut sql_buff)?
+        .render_executable(&mut sql_buff)?
         .fetch_all(&pool)
         .await?;
 
