@@ -1,6 +1,6 @@
 [package]
 name = "sqlx-askama-template"
-version = "0.3.3"
+version = "0.3.4"
 edition = "2024"
 license = "Apache-2.0"
 description = "Type-safe SQL templates with Askama and SQLx"
