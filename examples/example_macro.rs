@@ -14,7 +14,7 @@ struct User {
     union all 
     {%- let id=99999_i64 %}
     {%- let name="super man" %}
-    select {{et(id)}} as id,{{et(name)}} as name
+    select {{e(id)}} as id,{{e(name)}} as name
 "#)]
 #[add_type(&'q str)]
 pub struct UserQuery {
@@ -41,8 +41,8 @@ async fn simple_query() -> Result<(), Error> {
     //pg
 
     let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
-    let mut sql_buff = String::new();
-    let execute = user_query.render_executable(&mut sql_buff)?;
+
+    let execute = user_query.render_executable()?;
 
     let rows = pool.fetch_all(execute).await?;
     let mut db_users = Vec::new();
@@ -54,11 +54,8 @@ async fn simple_query() -> Result<(), Error> {
     //sqlite+any
     install_default_drivers();
     let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
-    let mut sql_buff = String::new();
-    let rows = user_query
-        .render_executable(&mut sql_buff)?
-        .fetch_all(&pool)
-        .await?;
+
+    let rows = user_query.render_executable()?.fetch_all(&pool).await?;
 
     let mut db_users = Vec::new();
     for row in &rows {
@@ -81,33 +78,33 @@ async fn simple_query() -> Result<(), Error> {
 }
 
 #[derive(SqlTemplate)]
-#[add_type(Option<&'a i64>,bool)]
 #[template(
     source = r#"
     {%- let v="abc".to_string() %}
-    SELECT {{et(v)}} as v,t.* FROM table t
+    SELECT {{e(v)}} as v,t.* FROM table t
     WHERE arg1 = {{e(arg1)}}
       AND arg2 = {{e(arg2)}}
       AND arg3 = {{e(arg3)}}
       AND arg4 = {{e(arg4.first())}}
       AND arg5 = {{e(arg5.get(&0))}}
       {%- let v2=3_i64 %}
-      AND arg6 = {{et(v2)}}
+      AND arg6 = {{e(v2)}}
       {%- let v3="abc".to_string() %}
-      AND arg7 = {{et(v3)}}
+      AND arg7 = {{e(v3)}}
       AND arg_list1 in {{el(arg4)}}
       {%- let list=["abc".to_string()] %}
-      AND arg_temp_list1 in {{etl(*list)}}
+      AND arg_temp_list1 in {{el(list.iter())}}
       AND arg_list2 in {{el(arg5.values())}}
       {%- if let Some(first) = arg4.first() %}
-        AND arg_option = {{et(**first)}}
+        AND arg_option = {{e(first)}}
       {%- endif %}
       {%- if let Some(first) = arg5.get(&0) %}
-        AND arg_option1 = {{et(**first)}}
+        AND arg_option1 = {{e(first)}}
       {%- endif %}     
 "#,
     print = "all"
 )]
+#[add_type(Option<&'a i64>,bool)]
 pub struct QueryData<'a, T>
 where
     T: Sized,
@@ -136,12 +133,12 @@ where
     LEFT JOIN orders o ON u.id = o.user_id
     WHERE 1=1
     {%- if let Some(min_age) = min_age %}
-        AND age >= {{et(min_age)}}
+        AND age >= {{e(min_age)}}
     {%- endif %}
     {%- if filter_names.len()>0 %}
         AND name IN {{el(filter_names)}}
     {%- endif %}
-    AND status IN {{etl(*status_list)}}
+    AND status IN {{el(*status_list)}}
     GROUP BY u.id
     ORDER BY {{order_field}}
     LIMIT {{e(limit)}}
@@ -183,12 +180,14 @@ fn render_complex_sql() {
         <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
 
     assert_eq!(arg.unwrap().len(), 6);
+
     println!("----{sql}----");
 }
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    simple_query().await?;
-    render_complex_sql();
 
-    Ok(())
+fn main() -> Result<(), Error> {
+    smol::block_on(async {
+        simple_query().await?;
+        render_complex_sql();
+        Ok(())
+    })
 }

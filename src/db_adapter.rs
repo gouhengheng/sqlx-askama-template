@@ -10,6 +10,7 @@ use sqlx_core::{
     encode::Encode,
     executor::{Execute, Executor},
     pool::PoolConnection,
+    sql_str::SqlStr,
     try_stream,
     types::Type,
 };
@@ -49,7 +50,7 @@ pub trait DatabaseDialect {
         sql: &mut String,
         page_size: i64,
         page_no: i64,
-        arg: &mut DB::Arguments<'q>,
+        arg: &mut DB::Arguments,
     ) -> Result<(), Error>
     where
         DB: Database,
@@ -138,7 +139,7 @@ impl DatabaseDialect for DBType {
         page_size: i64,
         page_no: i64,
 
-        arg: &mut DB::Arguments<'q>,
+        arg: &mut DB::Arguments,
     ) -> Result<(), Error>
     where
         DB: Database,
@@ -161,7 +162,7 @@ fn pg_mysql_sqlite_page_sql<'c, 'q, DB>(
     mut page_size: i64,
     mut page_no: i64,
     f: Option<fn(usize, &mut String)>,
-    arg: &mut DB::Arguments<'q>,
+    arg: &mut DB::Arguments,
 ) -> Result<(), Error>
 where
     DB: Database,
@@ -302,14 +303,11 @@ where
         }
     }
 
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
         parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> futures_core::future::BoxFuture<
-        'e,
-        Result<<Self::Database as Database>::Statement<'q>, Error>,
-    >
+    ) -> futures_core::future::BoxFuture<'e, Result<<Self::Database as Database>::Statement, Error>>
     where
         'c: 'e,
     {
@@ -321,9 +319,9 @@ where
         }
     }
 
-    fn describe<'e, 'q: 'e>(
+    fn describe<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
     ) -> futures_core::future::BoxFuture<'e, Result<Describe<Self::Database>, Error>>
     where
         'c: 'e,

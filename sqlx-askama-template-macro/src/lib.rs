@@ -127,7 +127,7 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
                 let ident = get_type_identifier(ty);
                 if seen_types.insert(ident) {
                     bound_types.extend(quote! {
-                        #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
+                        #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB>,
                     });
                 }
             }
@@ -143,10 +143,18 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
             if let Ok(types) = parser.parse2(meta_list.tokens.clone()) {
                 for ty in types {
                     let ident = get_type_identifier(&ty);
+                    let have_lifetime = ident.0.contains('\'');
                     if seen_types.insert(ident) {
-                        bound_types.extend(quote! {
-                                #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB> + #data_lifetime,
+                        if have_lifetime {
+                            //非引用类型且包含生命周期如slef.Vec<i64>.first()->Option<&'a i64>数据来源自结构体本身的字段生命周期相同;或者如&str这样的静态引用，使用结构体本身生命周期
+                            bound_types.extend(quote! {
+                                #ty: ::sqlx::Encode<#data_lifetime, DB> + ::sqlx::Type<DB>,
                             });
+                        } else {
+                            bound_types.extend(quote! {
+                            #ty: for<'template_local_lifetime> ::sqlx::Encode<'template_local_lifetime, DB> + ::sqlx::Type<DB>,
+                        });
+                        }
                     }
                 }
             }
@@ -169,13 +177,13 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
                 f: ::std::option::Option<fn(usize, &mut String)>,
                 sql_buffer: &mut String,
             ) -> ::std::result::Result<
-                ::std::option::Option<DB::Arguments<#data_lifetime>>,
+                ::std::option::Option<DB::Arguments>,
                 ::sqlx::Error,
             > {
                 #[derive(::sqlx_askama_template::askama::Template)]
                 #[template(#template_attrs)]
                 struct Wrapper #wrapper_generics (
-                    ::sqlx_askama_template::TemplateArg<#data_lifetime, DB, #name #ty_generics>
+                    ::sqlx_askama_template::TemplateArg<#data_lifetime,DB, #name #ty_generics>
                 ) #where_clause
                     DB: ::sqlx::Database,
                     #bound_types;

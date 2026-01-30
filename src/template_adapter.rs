@@ -47,15 +47,15 @@ impl PageInfo {
 /// - `'q`: Query lifetime
 /// - `DB`: Database type
 /// - `T`: SQL template type
-pub struct DBAdapterManager<'q, DB, T>
+pub struct DBAdapterManager<'s, DB, T>
 where
     DB: Database,
-    T: SqlTemplate<'q, DB>,
+    T: SqlTemplate<'s, DB>,
 {
     pub(crate) sql: String,
     pub(crate) template: T,
     persistent: bool,
-    _p: PhantomData<&'q DB>,
+    _p: PhantomData<&'s DB>,
     page_size: Option<i64>,
     page_no: Option<i64>,
 }
@@ -84,10 +84,10 @@ where
         &self.sql
     }
 }
-impl<'q, DB, T> DBAdapterManager<'q, DB, T>
+impl<'q, 's, DB, T> DBAdapterManager<'s, DB, T>
 where
     DB: Database,
-    T: SqlTemplate<'q, DB>,
+    T: SqlTemplate<'s, DB>,
     i64: Encode<'q, DB> + Type<DB>,
 {
     /// Configures query persistence (default: true)
@@ -100,7 +100,7 @@ where
     /// # Arguments
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count<'c, Adapter>(&'q mut self, db_adapter: Adapter) -> Result<i64, Error>
+    pub async fn count<'c, Adapter>(mut self, db_adapter: Adapter) -> Result<i64, Error>
     where
         Adapter: BackendDB<'c, DB>,
         (i64,): for<'r> FromRow<'r, DB::Row>,
@@ -115,7 +115,7 @@ where
 
         db_type.write_count_sql(&mut sql);
         self.sql = sql;
-        let execute = SqlTemplateExecute::new(&self.sql, arg).set_persistent(self.persistent);
+        let execute = SqlTemplateExecute::new(self.sql, arg).set_persistent(self.persistent);
         let (count,): (i64,) = execute.fetch_one_as(executor).await?;
         Ok(count)
     }
@@ -126,7 +126,7 @@ where
     /// * `db_adapter` - Database connection adapter
     #[inline]
     pub async fn count_page<'c, Adapter>(
-        &'q mut self,
+        self,
 
         page_size: i64,
         db_adapter: Adapter,
@@ -156,7 +156,7 @@ where
     ) -> Result<
         (
             String,
-            Option<DB::Arguments<'q>>,
+            Option<DB::Arguments>,
             impl DatabaseDialect,
             impl Executor<'c, Database = DB>,
         ),
@@ -181,10 +181,7 @@ where
     /// like sqlx::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
-    pub async fn execute<'c, Adapter>(
-        &'q mut self,
-        db_adapter: Adapter,
-    ) -> Result<DB::QueryResult, Error>
+    pub async fn execute<'c, Adapter>(self, db_adapter: Adapter) -> Result<DB::QueryResult, Error>
     where
         Adapter: BackendDB<'c, DB>,
     {
@@ -194,7 +191,7 @@ where
     /// Execute multiple queries and return the rows affected from each query, in a stream.
     #[inline]
     pub async fn execute_many<'c, 'e, Adapter>(
-        &'q mut self,
+        self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::QueryResult, Error>>
@@ -217,7 +214,7 @@ where
     /// Execute the query and return the generated results as a stream.
     #[inline]
     pub async fn fetch<'c, 'e, Adapter>(
-        &'q mut self,
+        self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::Row, Error>>
@@ -242,9 +239,8 @@ where
     /// For each query in the stream, any generated rows are returned first,
     /// then the `QueryResult` with the number of rows affected.
     #[inline]
-    #[allow(clippy::type_complexity)]
     pub async fn fetch_many<'c, 'e, Adapter>(
-        &'q mut self,
+        mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, DB::Row>, Error>>
     where
@@ -264,8 +260,8 @@ where
             Ok((sql, arg, _db_type, executor)) => {
                 self.sql = sql;
                 let execute =
-                    SqlTemplateExecute::new(&self.sql, arg).set_persistent(self.persistent);
-                execute.fetch_many(executor)
+                    SqlTemplateExecute::new(self.sql, arg).set_persistent(self.persistent);
+                executor.fetch_many(execute)
             }
             Err(e) => stream::once(async move { Err(e) }).boxed(),
         }
@@ -280,10 +276,7 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all<'c, Adapter>(
-        &'q mut self,
-        db_adapter: Adapter,
-    ) -> Result<Vec<DB::Row>, Error>
+    pub async fn fetch_all<'c, Adapter>(self, db_adapter: Adapter) -> Result<Vec<DB::Row>, Error>
     where
         Adapter: BackendDB<'c, DB>,
     {
@@ -303,7 +296,7 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_one<'c, Adapter>(&'q mut self, db_adapter: Adapter) -> Result<DB::Row, Error>
+    pub async fn fetch_one<'c, Adapter>(self, db_adapter: Adapter) -> Result<DB::Row, Error>
     where
         Adapter: BackendDB<'c, DB>,
     {
@@ -329,7 +322,7 @@ where
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
     pub async fn fetch_optional<'c, Adapter>(
-        &'q mut self,
+        self,
 
         db_adapter: Adapter,
     ) -> Result<Option<DB::Row>, Error>
@@ -342,7 +335,7 @@ where
     /// like sqlx::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
     pub async fn fetch_as<'c, 'e, Adapter, O>(
-        &'q mut self,
+        self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<O, Error>>
@@ -361,7 +354,7 @@ where
     /// Execute multiple queries and return the generated results as a stream
     /// from each query, in a stream.
     pub async fn fetch_many_as<'c, 'e, Adapter, O>(
-        &'q mut self,
+        self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
@@ -388,10 +381,7 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all_as<'c, Adapter, O>(
-        &'q mut self,
-        db_adapter: Adapter,
-    ) -> Result<Vec<O>, Error>
+    pub async fn fetch_all_as<'c, Adapter, O>(self, db_adapter: Adapter) -> Result<Vec<O>, Error>
     where
         Adapter: BackendDB<'c, DB>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
@@ -411,7 +401,7 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_one_as<'c, Adapter, O>(&'q mut self, db_adapter: Adapter) -> Result<O, Error>
+    pub async fn fetch_one_as<'c, Adapter, O>(self, db_adapter: Adapter) -> Result<O, Error>
     where
         Adapter: BackendDB<'c, DB>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
@@ -434,7 +424,7 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     pub async fn fetch_optional_as<'c, Adapter, O>(
-        &'q mut self,
+        self,
 
         db_adapter: Adapter,
     ) -> Result<Option<O>, Error>

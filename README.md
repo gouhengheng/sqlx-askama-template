@@ -17,15 +17,23 @@ A SQLx query builder based on the Askama template engine, providing type-safe SQ
 - 💡 **Smart Parameter Binding** - Auto-expansion for list parameters  
 - 🎨 **Template Syntax** - Full Askama templating capabilities  
 
+## Require
+sqlx > 0.9.0-alpha.1
+
 ## Installation  
 
 Add to `Cargo.toml`:  
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.3.1"
-sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
+sqlx-askama-template = "0.4.0-alpha.1"
 tokio = { version = "1.0", features = ["full"] }
+sqlx = { version = "0.9.0-alpha.1", default-features = false, features = [
+    "all-databases",
+    "runtime-tokio",
+    "macros",
+] }
+env_logger="0.11"
 ```  
 
 ## Quick Start  
@@ -45,11 +53,11 @@ struct User {
 #[template(source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
     union all 
-    {%- let id=99999_i64 %}
+    {%- let id=99999_i32 %}
     {%- let name="super man" %}
-    select {{et(id)}} as id,{{et(name)}} as name
+    select {{e(id)}} as id,{{e(name)}} as name
 "#)]
-#[add_type(&'q str)]
+#[add_type(&'q str,i32)] //  binding Encode trait for local &str and i32 variables in template, 'q is default lifetime
 pub struct UserQuery {
     pub user_id: i64,
     pub user_name: String,
@@ -66,7 +74,8 @@ async fn simple_query(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
             name: "super man".to_string(),
         },
     ];
-    let user_query = UserQuery {
+
+    let mut user_query = UserQuery {
         user_id: 1,
         user_name: "admin".to_string(),
     };
@@ -92,11 +101,12 @@ async fn simple_query(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
         let mut conn = pool.begin().await?;
         let (get_db_type, _get_conn) = conn.backend_db().await?;
         assert_eq!(db_type, get_db_type);
-
+        user_query.user_id = 9999;
         let page_info = user_query
             .adapter_render()
             .count_page(1, &mut *conn)
             .await?;
+        user_query.user_id = 1;
 
         assert_eq!(page_info.total, 2);
         assert_eq!(page_info.page_count, 2);
@@ -111,7 +121,7 @@ async fn main() -> Result<(), Error> {
         std::env::set_var("RUST_LOG", "sqlx_askama_template=DEBUG");
     }
     env_logger::init();
-
+    tokio::spawn(async { println!("started") });
     install_default_drivers();
     let urls = vec![
         (
@@ -119,13 +129,12 @@ async fn main() -> Result<(), Error> {
             "postgres://postgres:postgres@localhost/postgres",
         ),
         (DBType::SQLite, "sqlite://db.file?mode=memory"),
-       // (DBType::MySQL, "mysql://root:root@localhost/mysql"),
+        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
     ];
     simple_query(urls).await?;
 
     Ok(())
 }
-
 ```  
 
 ## Core Features  
@@ -136,8 +145,7 @@ async fn main() -> Result<(), Error> {
 |---------------------|---------------------------|------------------------------|  
 | Single Parameter    | `{{e(user_id)}}`          | Binds a single parameter     |  
 | List Expansion      | `{{el(ids)}}`             | Expands to `IN (?, ?)`       |  
-| Temporary Variables | `{% let limit = 100 %}`   | Defines template-local variables |  
-| Conditional Logic   | `{% if active %}...{% endif %}` | Dynamic SQL conditions |  
+
 
 ### Parameter Encoding Methods  
 
@@ -145,8 +153,7 @@ async fn main() -> Result<(), Error> {
 |---------|-------------------------------|-----------------------|  
 | `e()`   | Encodes a single value        | `{{e(user_id)}}`      |  
 | `el()`  | Encodes a list (`$1, $2...`)  | `{{el(ids)}}`         |  
-| `et()`  | Encodes a template-local value | `{{et(limit)}}`      |  
-| `etl()` | Encodes a template-local list | `{{etl(filters)}}`   |  
+
 
 ## Multi-Database Support  
 
@@ -182,7 +189,7 @@ Used to add `Encode + Type` constraints for non-field types in templates (e.g., 
 
 ```rust  
 #[derive(SqlTemplate)]  
-#[add_type(chrono::NaiveDate, Option<&'a str>)]  // Add extra type support  
+#[add_type(chrono::NaiveDate, Option<&'q str>)]  // Add extra type support  
 ```  
 
 **Features**:  
@@ -210,119 +217,68 @@ use std::collections::HashMap;
 
 use sqlx_askama_template::SqlTemplate;  
 
-#[derive(SqlTemplate)]  
-#[template(  
-    source = r#"  
-    {% let status_list = ["active", "pending"] %}  
-    SELECT  
-        u.id,  
-        u.name,  
-        COUNT(o.id) AS order_count  
-    FROM users u  
-    LEFT JOIN orders o ON u.id = o.user_id  
-    WHERE 1=1  
-    {% if let Some(min_age) = min_age %}  
-        AND age >= {{et(min_age)}}  
-    {% endif %}  
-    {% if filter_names.len()>0 %}  
-        AND name IN {{el(filter_names)}}  
-    {% endif %}  
-    AND status IN {{etl(*status_list)}}  
-    GROUP BY u.id  
-    ORDER BY {{order_field}}  
-    LIMIT {{e(limit)}}  
-    "#,  
-    ext = "txt"  
-)]  
-#[add_type(i32)]  
-pub struct ComplexQuery<'a> {  
-    min_age: Option<i32>,  
-    #[ignore_type]  
-    filter_names: Vec<&'a str>,  
-    order_field: &'a str,  
-    limit: i64,  
-}  
+#[derive(SqlTemplate)]
+#[template(source = r#"
+    {%- let status_list = ["active", "pending"] %}
+    SELECT 
+        u.id,
+        u.name,
+        COUNT(o.id) AS order_count
+    FROM users u
+    LEFT JOIN orders o ON u.id = o.user_id
+    WHERE 1=1
+    {%- if let Some(min_age) = min_age %}
+        AND age >= {{e(min_age)}}
+    {%- endif %}
+    {%- if filter_names.len()>0 %}
+        AND name IN {{el(filter_names)}}
+    {%- endif %}
+    AND status IN {{el(*status_list)}}
+    GROUP BY u.id
+    ORDER BY {{order_field}}
+    LIMIT {{e(limit)}}
+    "#)]
+#[add_type(i32)]
+pub struct ComplexQuery<'a> {
+    min_age: Option<i32>,
+    #[ignore_type]
+    filter_names: Vec<&'a str>,
+    order_field: &'a str,
+    limit: i64,
+}
 
-#[test]  
-fn render_complex_sql() {  
-    let data = ComplexQuery {  
-        filter_names: vec!["name1", "name2"],  
-        limit: 10,  
-        min_age: Some(18),  
-        order_field: "id",  
-    };  
+fn render_complex_sql() {
+    let data = QueryData {
+        arg1: 42,
+        _arg1: 123,
+        arg2: "value".to_string(),
+        arg3: "reference",
+        arg4: vec![12, 12, 55, 66],
+        arg5: HashMap::from_iter([(0, 2), (1, 2), (2, 3)]),
+        arg6: 1,
+    };
 
-    let (sql, arg) =  
-        <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();  
-    use sqlx::Arguments;  
-    assert_eq!(arg.unwrap().len(), 6);  
-    println!("----{sql}----");  
-}  
+    let (sql, arg) =
+        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
 
-#[derive(SqlTemplate)]  
-#[add_type(Option<&'a i64>, bool)]  
-#[template(  
-    ext = "txt",  
-    source = r#"  
-    {% let v="abc".to_string() %}  
-    SELECT {{et(v)}} as v,t.* FROM table t  
-    WHERE arg1 = {{e(arg1)}}  
-      AND arg2 = {{e(arg2)}}  
-      AND arg3 = {{e(arg3)}}  
-      AND arg4 = {{e(arg4.first())}}  
-      AND arg5 = {{e(arg5.get(&0))}}  
-      {% let v2=3_i64 %}  
-      AND arg6 = {{et(v2)}}  
-      {% let v3="abc".to_string() %}  
-      AND arg7 = {{et(v3)}}  
-      AND arg_list1 in {{el(arg4)}}  
-      {% let list=["abc".to_string()] %}  
-      AND arg_temp_list1 in {{etl(*list)}}  
-      AND arg_list2 in {{el(arg5.values())}}  
-      {% if let Some(first) = arg4.first() %}  
-        AND arg_option = {{et(**first)}}  
-      {% endif %}  
-      {% if let Some(first) = arg5.get(&0) %}  
-        AND arg_option1 = {{et(**first)}}  
-      {% endif %}  
-"#,  
-    print = "all"  
-)]  
-pub struct QueryData<'a, T>  
-where  
-    T: Sized,  
-{  
-    arg1: i64,  
-    _arg1: i64,  // Same type  
-    arg2: String,  
-    arg3: &'a str,  
-    #[ignore_type]  
-    arg4: Vec<i64>,  
-    #[ignore_type]  
-    arg5: HashMap<i32, i64>,  
-    #[ignore_type]  
-    #[allow(unused)]  
-    arg6: T,  
-}  
+    assert_eq!(arg.unwrap().len(), 18);
+    println!("----{sql}----");
 
-#[test]  
-fn render_query_data_sql() {  
-    let data = QueryData {  
-        arg1: 42,  
-        _arg1: 123,  
-        arg2: "value".to_string(),  
-        arg3: "reference",  
-        arg4: vec![12, 12, 55, 66],  
-        arg5: HashMap::from_iter([(0, 2), (1, 2), (2, 3)]),  
-        arg6: 1,  
-    };  
+    let data = ComplexQuery {
+        filter_names: vec!["name1", "name2"],
+        limit: 10,
+        min_age: Some(18),
+        order_field: "id",
+    };
 
-    let (sql, arg) =  
-        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();  
-    use sqlx::Arguments;  
-    assert_eq!(arg.unwrap().len(), 18);  
-    println!("----{sql}----");  
-}  
+    let (sql, arg) =
+        <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+
+    assert_eq!(arg.unwrap().len(), 6);
+
+    println!("----{sql}----");
+}
+
 ```  
 
 ## Best Practices  
@@ -334,17 +290,13 @@ fn render_query_data_sql() {
 4. Set `print = "none"` in production  
 ```  
 
-## License  
+## License
 
-This project is licensed under the [Apache License 2.0](LICENSE).  
-Copyright © 2025 gouhengheng  
+Licensed under either of
 
-> **Important Notice**:  
-> Under the Apache 2.0 License, you may not use this file except in compliance with the License.  
-> You may obtain a copy of the License at:  
-> <http://www.apache.org/licenses/LICENSE-2.0>  
->  
-> Unless required by applicable law or agreed to in writing, software  
-> distributed under the License is distributed on an "AS IS" BASIS,  
-> WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
-> See the License for specific governing permissions and limitations.  
+-   Apache License, Version 2.0
+    ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+-   MIT license
+    ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.

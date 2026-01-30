@@ -1,10 +1,18 @@
 #![doc = include_str!("../README.md")]
 
 use sqlx_core::{Error, database::Database};
-mod v3;
+
 pub use askama;
 pub use sqlx_askama_template_macro::*;
-pub use v3::*;
+mod db_adapter;
+mod sql_template_execute;
+mod template_adapter;
+mod template_arg;
+
+pub use db_adapter::*;
+pub use sql_template_execute::*;
+pub use template_adapter::*;
+pub use template_arg::*;
 
 /// SQL template trait
 ///
@@ -29,36 +37,25 @@ where
         self,
         f: Option<fn(usize, &mut String)>,
         sql_buffer: &mut String,
-    ) -> Result<Option<DB::Arguments<'q>>, Error>;
+    ) -> Result<Option<DB::Arguments>, Error>;
     /// Renders SQL template and returns query string with parameters
-    fn render_sql(self) -> Result<(String, Option<DB::Arguments<'q>>), Error> {
+    fn render_sql(self) -> Result<(String, Option<DB::Arguments>), Error> {
         let mut sql_buff = String::new();
         let arg = self.render_sql_with_encode_placeholder_fn(None, &mut sql_buff)?;
         Ok((sql_buff, arg))
     }
 
     /// Renders SQL template and returns executable query result
-    fn render_executable(
-        self,
-        sql_buffer: &'q mut String,
-    ) -> Result<SqlTemplateExecute<'q, DB>, Error> {
+    fn render_executable(self) -> Result<SqlTemplateExecute<DB>, Error> {
         let (sql, arguments) = self.render_sql()?;
-        *sql_buffer = sql;
+
         Ok(SqlTemplateExecute {
-            sql: sql_buffer,
-
+            sql,
             arguments,
-
             persistent: true,
         })
     }
-    #[deprecated(note = "use `adapter_render` instead")]
-    fn render_db_adapter_manager(
-        self,
-        _sql_buff: &'q mut String,
-    ) -> DBAdapterManager<'q, DB, Self> {
-        self.adapter_render()
-    }
+
     /// Creates a database adapter manager for the template
     ///
     /// Provides an adapter pattern interface for managing template rendering

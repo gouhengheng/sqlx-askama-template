@@ -1,12 +1,13 @@
 [package]
 name = "sqlx-askama-template-macro"
-version = "0.2.1"
-edition = "2024"
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
 description = "Procedural macro for SQLx + Askama integration"
-repository = "https://github.com/gouhengheng/sqlx-askama-template"
-keywords = ["sqlx", "askama", "macro"]
-categories = ["database", "template-engine"]
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 [lib]
 proc-macro = true
 

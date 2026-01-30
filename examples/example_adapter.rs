@@ -1,10 +1,13 @@
+use futures_util::TryStreamExt;
+use sqlx::any::AnyRow;
 use sqlx::postgres::PgListener;
 use sqlx::{AnyPool, Error, any::install_default_drivers};
-use sqlx::{MySqlPool, PgPool, SqlitePool};
+use sqlx::{FromRow, MySqlPool, PgPool, SqlitePool};
 
 use sqlx_askama_template::{BackendDB, DatabaseDialect, SqlTemplate};
 
 use sqlx_askama_template::DBType;
+
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
 struct User {
     id: i64,
@@ -16,7 +19,7 @@ struct User {
     union all 
     {%- let id=99999_i64 %}
     {%- let name="super man" %}
-    select {{et(id)}} as id,{{et(name)}} as name
+    select {{e(id)}} as id,{{e(name)}} as name
 "#)]
 pub struct UserQuery<'a> {
     pub user_id: i64,
@@ -125,7 +128,7 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
     };
     let pool = AnyPool::connect(url).await?;
 
-    let mut db_adatper = user_query.adapter_render();
+    let db_adatper = user_query.adapter_render();
 
     let count = db_adatper.count(&pool).await?;
     assert_eq!(2, count);
@@ -171,20 +174,31 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
 
     let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
     println!("{:?}", users);
+    let mut stream = user_query.adapter_render().fetch(&pool).await;
+
+    while let Some(row) = stream.try_next().await? {
+        let (id, name): (i64, String) = <(i64, String) as FromRow<'_, AnyRow>>::from_row(&row)?;
+        println!("id:{}, name:{}", id, name);
+    }
 
     Ok(())
 }
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    let urls = vec![
-        (
-            DBType::PostgreSQL,
-            "postgres://postgres:postgres@localhost/postgres",
-        ),
-        (DBType::SQLite, "sqlite://db.file?mode=memory"),
-        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
-    ];
-    test_backend(urls).await?;
 
-    Ok(())
+fn main() -> Result<(), Error> {
+    smol::block_on(async {
+        unsafe {
+            std::env::set_var("RUST_LOG", "sqlx_askama_template=DEBUG");
+        }
+        env_logger::init();
+        let urls = vec![
+            (
+                DBType::PostgreSQL,
+                "postgres://postgres:postgres@localhost/postgres",
+            ),
+            (DBType::SQLite, "sqlite://db.file?mode=memory"),
+            //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
+        ];
+        test_backend(urls).await?;
+        Ok(())
+    })
 }

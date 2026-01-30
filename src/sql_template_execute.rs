@@ -8,31 +8,32 @@ use sqlx_core::{
     from_row::FromRow,
     query::{Map, Query, query, query_with},
     query_as::{QueryAs, query_as, query_as_with},
+    sql_str::{AssertSqlSafe, SqlSafeStr, SqlStr},
 };
 /// Internal executor for SQL templates
-pub struct SqlTemplateExecute<'q, DB: Database> {
+pub struct SqlTemplateExecute<DB: Database> {
     /// Reference to SQL query string
-    pub(crate) sql: &'q str,
+    pub(crate) sql: String,
     /// SQL parameters
-    pub(crate) arguments: Option<DB::Arguments<'q>>,
+    pub(crate) arguments: Option<DB::Arguments>,
     /// Persistent flag
     pub(crate) persistent: bool,
 }
-impl<'q, DB: Database> Clone for SqlTemplateExecute<'q, DB>
+impl<DB: Database> Clone for SqlTemplateExecute<DB>
 where
-    DB::Arguments<'q>: Clone,
+    DB::Arguments: Clone,
 {
     fn clone(&self) -> Self {
         SqlTemplateExecute {
-            sql: self.sql,
+            sql: self.sql.clone(),
             arguments: self.arguments.clone(),
             persistent: self.persistent,
         }
     }
 }
-impl<'q, DB: Database> SqlTemplateExecute<'q, DB> {
+impl<DB: Database> SqlTemplateExecute<DB> {
     /// Creates a new SQL template executor
-    pub fn new(sql: &'q str, arguments: Option<DB::Arguments<'q>>) -> Self {
+    pub fn new(sql: String, arguments: Option<DB::Arguments>) -> Self {
         SqlTemplateExecute {
             sql,
             arguments,
@@ -54,34 +55,34 @@ impl<'q, DB: Database> SqlTemplateExecute<'q, DB> {
         self
     }
 }
-impl<'q, DB> SqlTemplateExecute<'q, DB>
+impl<'q, DB> SqlTemplateExecute<DB>
 where
     DB: Database + HasStatementCache,
-    DB::Arguments<'q>: IntoArguments<'q, DB>,
+    DB::Arguments: IntoArguments<DB>,
 {
     /// to sqlx_core::QueryAs
     /// Converts the SQL template to a `QueryAs` object, which can be executed to fetch rows
     #[inline]
-    pub fn to_query_as<O>(self) -> QueryAs<'q, DB, O, DB::Arguments<'q>>
+    pub fn to_query_as<O>(self) -> QueryAs<'q, DB, O, DB::Arguments>
     where
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         let q = match self.arguments {
-            Some(args) => query_as_with(self.sql, args),
-            None => query_as(self.sql),
+            Some(args) => query_as_with(AssertSqlSafe(self.sql), args),
+            None => query_as(AssertSqlSafe(self.sql)),
         };
         q.persistent(self.persistent)
     }
     /// to sqlx_core::Query
     /// Converts the SQL template to a `Query` object, which can be executed to fetch rows
     #[inline]
-    pub fn to_query(self) -> Query<'q, DB, DB::Arguments<'q>> {
+    pub fn to_query(self) -> Query<'q, DB, DB::Arguments> {
         let q = match self.arguments {
             Some(args) => {
                 //   let wrap = ArgWrapper(args);
-                query_with(self.sql, args)
+                query_with(AssertSqlSafe(self.sql), args)
             }
-            None => query(self.sql),
+            None => query(AssertSqlSafe(self.sql)),
         };
         q.persistent(self.persistent)
     }
@@ -91,7 +92,7 @@ where
     pub fn map<F, O>(
         self,
         f: F,
-    ) -> Map<'q, DB, impl FnMut(DB::Row) -> Result<O, sqlx_core::Error> + Send, DB::Arguments<'q>>
+    ) -> Map<'q, DB, impl FnMut(DB::Row) -> Result<O, sqlx_core::Error> + Send, DB::Arguments>
     where
         F: FnMut(DB::Row) -> O + Send,
         O: Unpin,
@@ -102,7 +103,7 @@ where
     /// like sqlx_core::Query::try_map
     /// Map each row in the result to another type, returning an error if the mapping fails.
     #[inline]
-    pub fn try_map<F, O>(self, f: F) -> Map<'q, DB, F, DB::Arguments<'q>>
+    pub fn try_map<F, O>(self, f: F) -> Map<'q, DB, F, DB::Arguments>
     where
         F: FnMut(DB::Row) -> Result<O, sqlx_core::Error> + Send,
         O: Unpin,
@@ -110,7 +111,7 @@ where
         self.to_query().try_map(f)
     }
 }
-impl<'q, DB> SqlTemplateExecute<'q, DB>
+impl<DB> SqlTemplateExecute<DB>
 where
     DB: Database,
 {
@@ -119,8 +120,7 @@ where
     #[inline]
     pub async fn execute<'e, 'c: 'e, E>(self, executor: E) -> Result<DB::QueryResult, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.execute(self).await
@@ -133,8 +133,7 @@ where
         executor: E,
     ) -> BoxStream<'e, Result<DB::QueryResult, Error>>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         #[allow(deprecated)]
@@ -145,8 +144,7 @@ where
     #[inline]
     pub fn fetch<'e, 'c: 'e, E>(self, executor: E) -> BoxStream<'e, Result<DB::Row, Error>>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch(self)
@@ -163,8 +161,7 @@ where
         executor: E,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, DB::Row>, Error>>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         #[allow(deprecated)]
@@ -181,8 +178,7 @@ where
     #[inline]
     pub async fn fetch_all<'e, 'c: 'e, E>(self, executor: E) -> Result<Vec<DB::Row>, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch_all(self).await
@@ -203,8 +199,7 @@ where
     #[inline]
     pub async fn fetch_one<'e, 'c: 'e, E>(self, executor: E) -> Result<DB::Row, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch_one(self).await
@@ -225,8 +220,7 @@ where
     #[inline]
     pub async fn fetch_optional<'e, 'c: 'e, E>(self, executor: E) -> Result<Option<DB::Row>, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch_optional(self).await
@@ -238,8 +232,7 @@ where
     /// Execute the query and return the generated results as a stream.
     pub fn fetch_as<'e, 'c: 'e, O, E>(self, executor: E) -> BoxStream<'e, Result<O, Error>>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -256,8 +249,7 @@ where
         executor: E,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -283,8 +275,7 @@ where
     #[inline]
     pub async fn fetch_all_as<'e, 'c: 'e, O, E>(self, executor: E) -> Result<Vec<O>, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -306,8 +297,7 @@ where
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     pub async fn fetch_one_as<'e, 'c: 'e, O, E>(self, executor: E) -> Result<O, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -331,8 +321,7 @@ where
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     pub async fn fetch_optional_as<'e, 'c: 'e, O, E>(self, executor: E) -> Result<Option<O>, Error>
     where
-        'q: 'e,
-        DB::Arguments<'q>: 'e,
+        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -346,25 +335,23 @@ where
     }
 }
 
-impl<'q, DB: Database> Execute<'q, DB> for SqlTemplateExecute<'q, DB> {
+impl<'q, DB: Database> Execute<'q, DB> for SqlTemplateExecute<DB> {
     /// Returns the SQL query string
     #[inline]
-    fn sql(&self) -> &'q str {
-        log::debug!("Executing SQL: {}", self.sql);
-        self.sql
+    fn sql(self) -> SqlStr {
+        tracing::debug!("Executing SQL: {}", self.sql);
+        AssertSqlSafe(self.sql).into_sql_str()
     }
 
     /// Gets prepared statement (not supported in this implementation)
     #[inline]
-    fn statement(&self) -> Option<&DB::Statement<'q>> {
+    fn statement(&self) -> Option<&DB::Statement> {
         None
     }
 
     /// Takes ownership of the bound arguments
     #[inline]
-    fn take_arguments(
-        &mut self,
-    ) -> Result<Option<DB::Arguments<'q>>, sqlx_core::error::BoxDynError> {
+    fn take_arguments(&mut self) -> Result<Option<DB::Arguments>, sqlx_core::error::BoxDynError> {
         Ok(self.arguments.take())
     }
 
