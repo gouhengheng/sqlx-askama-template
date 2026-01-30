@@ -153,22 +153,6 @@ pub struct ComplexQuery<'a> {
 }
 
 fn render_complex_sql() {
-    let data = QueryData {
-        arg1: 42,
-        _arg1: 123,
-        arg2: "value".to_string(),
-        arg3: "reference",
-        arg4: vec![12, 12, 55, 66],
-        arg5: HashMap::from_iter([(0, 2), (1, 2), (2, 3)]),
-        arg6: 1,
-    };
-
-    let (sql, arg) =
-        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
-
-    assert_eq!(arg.unwrap().len(), 18);
-    println!("----{sql}----");
-
     let data = ComplexQuery {
         filter_names: vec!["name1", "name2"],
         limit: 10,

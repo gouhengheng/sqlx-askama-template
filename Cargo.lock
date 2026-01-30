@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "sqlx-askama-template"
-version = "0.4.0-alpha.1"
+version = "0.4.0-alpha.2"
 dependencies = [
  "askama",
  "env_logger",
@@ -1528,7 +1528,7 @@ dependencies = [
 
 [[package]]
 name = "sqlx-askama-template-macro"
-version = "0.4.0-alpha.1"
+version = "0.4.0-alpha.2"
 dependencies = [
  "proc-macro2",
  "quote",
