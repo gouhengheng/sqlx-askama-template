@@ -1,11 +1,11 @@
-use sqlx::postgres::PgListener;
+use axum::routing::get;
+use axum::{Json, Router};
+
 use sqlx::{AnyPool, Error, any::install_default_drivers};
-use sqlx::{MySqlPool, PgPool, SqlitePool};
 
-use sqlx_askama_template::{BackendDB, DatabaseDialect, SqlTemplate};
+use sqlx_askama_template::{DatabaseDialect, SqlTemplate, SqlTemplateExecute, backend_db};
 
-use sqlx_askama_template::DBType;
-#[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
+#[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug, serde::Serialize)]
 struct User {
     id: i64,
     name: String,
@@ -21,100 +21,6 @@ struct User {
 pub struct UserQuery<'a> {
     pub user_id: i64,
     pub user_name: &'a str,
-}
-
-async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
-    install_default_drivers();
-    for (db_type, url) in urls {
-        let pool = AnyPool::connect(url).await?;
-        // pool
-        let (get_db_type, _get_conn) = pool.backend_db().await?;
-        assert_eq!(db_type.backend_name(), get_db_type.backend_name());
-
-        // connection
-        let mut conn = pool.acquire().await?;
-        let (get_db_type, _get_conn) = conn.backend_db().await?;
-        assert_eq!(db_type.backend_name(), get_db_type.backend_name());
-
-        // tx
-        let mut conn = pool.begin().await?;
-        let (get_db_type, _get_conn) = conn.backend_db().await?;
-        assert_eq!(db_type.backend_name(), get_db_type.backend_name());
-
-        match db_type {
-            DBType::MySQL => {
-                //mysql  DBType::MySQL, "mysql://root:root@localhost/mysql"
-                let pool = MySqlPool::connect(url).await?;
-                // pool
-                let (get_db_type, _get_conn) = pool.backend_db().await?;
-                assert_eq!(DBType::MySQL.backend_name(), get_db_type.backend_name());
-
-                // connection
-                let mut conn = pool.acquire().await?;
-                let (get_db_type, _get_conn) = conn.backend_db().await?;
-                assert_eq!(DBType::MySQL.backend_name(), get_db_type.backend_name());
-
-                //
-                let mut conn = pool.begin().await?;
-                let (get_db_type, _get_conn) = conn.backend_db().await?;
-                assert_eq!(DBType::MySQL.backend_name(), get_db_type.backend_name());
-            }
-            DBType::PostgreSQL => {
-                //pg
-                let pool = PgPool::connect(url).await?;
-                // pool
-                let (get_db_type, _get_conn) = pool.backend_db().await?;
-                assert_eq!(
-                    DBType::PostgreSQL.backend_name(),
-                    get_db_type.backend_name()
-                );
-
-                // connection
-                let mut conn = pool.acquire().await?;
-                let (get_db_type, _get_conn) = conn.backend_db().await?;
-                assert_eq!(
-                    DBType::PostgreSQL.backend_name(),
-                    get_db_type.backend_name()
-                );
-
-                // tx
-                let mut conn = pool.begin().await?;
-                let (get_db_type, _get_conn) = conn.backend_db().await?;
-                assert_eq!(
-                    DBType::PostgreSQL.backend_name(),
-                    get_db_type.backend_name()
-                );
-
-                // listener
-                let mut listener = PgListener::connect(url).await?;
-                let (get_db_type, _get_conn) = listener.backend_db().await?;
-                assert_eq!(
-                    DBType::PostgreSQL.backend_name(),
-                    get_db_type.backend_name()
-                );
-            }
-            DBType::SQLite => {
-                //sqlite DBType::SQLite, "sqlite://db.file?mode=memory"
-                let pool = SqlitePool::connect(url).await?;
-                // pool
-                let (get_db_type, _get_conn) = pool.backend_db().await?;
-                assert_eq!(DBType::SQLite.backend_name(), get_db_type.backend_name());
-
-                // connection
-                let mut conn = pool.acquire().await?;
-                let (get_db_type, _get_conn) = conn.backend_db().await?;
-                assert_eq!(DBType::SQLite.backend_name(), get_db_type.backend_name());
-
-                // tx
-                let mut conn = pool.begin().await?;
-                let (get_db_type, _get_conn) = conn.backend_db().await?;
-                assert_eq!(DBType::SQLite.backend_name(), get_db_type.backend_name());
-            }
-        }
-        test_adapter_query(url).await?;
-    }
-
-    Ok(())
 }
 
 async fn test_adapter_query(url: &str) -> Result<(), Error> {
@@ -174,17 +80,66 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
 
     Ok(())
 }
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    let urls = vec![
-        (
-            DBType::PostgreSQL,
-            "postgres://postgres:postgres@localhost/postgres",
-        ),
-        (DBType::SQLite, "sqlite://db.file?mode=memory"),
-        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
-    ];
-    test_backend(urls).await?;
+#[axum::debug_handler]
+async fn root() -> Json<Vec<User>> {
+    //  test count
+    let user_query = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    };
+    let pool = AnyPool::connect("postgres://postgres:postgres@localhost/postgres")
+        .await
+        .unwrap();
 
-    Ok(())
+    // let mut db_adatper = user_query.adapter_render();
+    let (mut sql, arg, db_type, executor) = {
+        let (db_type, executor) = backend_db(&pool).await.unwrap();
+        let f = db_type.get_encode_placeholder_fn();
+        let mut sql = String::new();
+        let mut arg: Option<sqlx::any::AnyArguments<'_>> = <&UserQuery as SqlTemplate<
+            '_,
+            sqlx::any::Any,
+        >>::render_sql_with_encode_placeholder_fn(
+            &user_query, f, &mut sql
+        )
+        .unwrap();
+
+        if let (Some(page_no), Some(page_size)) = (None, None) {
+            let mut args: sqlx::any::AnyArguments<'_> = arg.unwrap_or_default();
+            db_type
+                .write_page_sql::<'_, '_, sqlx::any::Any>(&mut sql, page_size, page_no, &mut args)
+                .unwrap();
+            arg = Some(args);
+        }
+        (sql, arg, db_type, executor)
+    };
+
+    db_type.write_count_sql(&mut sql);
+
+    let execute: SqlTemplateExecute<'_, sqlx_core::any::Any> = SqlTemplateExecute::new(&sql, arg);
+    let (count,): (i64,) = execute.fetch_one_as(executor).await.unwrap();
+    println!("count: {count}");
+
+    let rows = user_query.adapter_render().fetch_all(&pool).await.unwrap();
+
+    let mut conn = pool.acquire().await.unwrap();
+    let rows = user_query
+        .adapter_render()
+        .fetch_all_as(&mut *conn)
+        .await
+        .unwrap();
+    //let count = db_adatper.count(&pool).await.unwrap();
+    //assert_eq!(2, count);
+    Json(rows)
+}
+#[tokio::main]
+async fn main() {
+    install_default_drivers();
+    // Example test case for a SQL template
+    // This is a placeholder and should be replaced with actual test logic
+    let app = Router::new().route("/", get(root));
+
+    // run our app with hyper, listening globally on port 3000
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

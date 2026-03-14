@@ -25,10 +25,12 @@ futures-util = "0.3.31"
 tracing = { version = "0.1" }
 log = "0.4.27"
 
-[dev-dependencies]
+#[dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = [
     "all-databases",
     "runtime-tokio",
     "macros",
 ] }
+axum = {version = "0.8.8",features = ["macros"]}
+serde = "1.0.228"

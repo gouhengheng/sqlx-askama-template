@@ -1,6 +1,6 @@
-use std::{any::Any, marker::PhantomData, ops::Deref};
+use std::{any::Any, marker::PhantomData, ops::Deref, pin::Pin};
 
-use futures_util::TryStreamExt;
+use futures_util::{FutureExt, TryStreamExt};
 use sqlx_core::{
     Either, Error,
     any::{AnyConnection, AnyPool},
@@ -17,7 +17,7 @@ use sqlx_core::{
 ///
 /// Provides a unified interface for handling database-specific SQL syntax variations,
 /// particularly for parameter binding, count queries, and pagination.
-pub trait DatabaseDialect {
+pub trait DatabaseDialect: Send {
     /// Returns the name of the database backend in use (e.g. PostgreSQL, MySQL, SQLite, etc.)
     fn backend_name(&self) -> &str;
     /// Gets placeholder generation function for parameter binding
@@ -209,27 +209,34 @@ where
 ///
 /// # Provided Methods
 /// [`backend_db`]: Default implementation using the module-level function
-pub trait BackendDB<'c, DB>
-where
-    DB: Database,
-{
-    type Executor: Executor<'c, Database = DB> + 'c;
-    type DatabaseDialect: DatabaseDialect;
+pub trait BackendDB<'c, DB: Database, C: Executor<'c, Database = DB> + 'c>: Send {
     fn backend_db(
         self,
-    ) -> impl std::future::Future<Output = Result<(Self::DatabaseDialect, Self::Executor), Error>> + Send;
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(DBType, AdapterExecutor<'c, DB, C>), Error>>
+                + Send
+                + 'c,
+        >,
+    >;
 }
-impl<'c, DB, C, C1> BackendDB<'c, DB> for C
+impl<'c, DB, C, C1> BackendDB<'c, DB, C> for C
 where
     DB: Database,
     C: Executor<'c, Database = DB> + 'c + Deref<Target = C1>,
     C1: Any,
     for<'c1> &'c1 mut DB::Connection: Executor<'c1, Database = DB>,
 {
-    type DatabaseDialect = DBType;
-    type Executor = AdapterExecutor<'c, DB, C>;
-    async fn backend_db(self) -> Result<(Self::DatabaseDialect, Self::Executor), Error> {
-        backend_db(self).await
+    fn backend_db(
+        self,
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(DBType, AdapterExecutor<'c, DB, C>), Error>>
+                + Send
+                + 'c,
+        >,
+    > {
+        backend_db(self).boxed()
     }
 }
 #[derive(Debug)]
@@ -254,7 +261,7 @@ impl<'c, DB, C> Executor<'c> for AdapterExecutor<'c, DB, C>
 where
     DB: Database,
     C: Executor<'c, Database = DB>,
-    for<'c1> &'c1 mut DB::Connection: Executor<'c1, Database = DB>,
+    for<'c1> &'c1 mut DB::Connection: Executor<'c1, Database = DB> + 'c1,
 {
     type Database = DB;
 

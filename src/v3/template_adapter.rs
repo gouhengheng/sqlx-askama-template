@@ -4,7 +4,7 @@ use askama::Result;
 use futures_core::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt, stream};
 
-use crate::SqlTemplate;
+use crate::{AdapterExecutor, DBType, SqlTemplate};
 use sqlx_core::{
     Either, Error, database::Database, encode::Encode, executor::Executor, from_row::FromRow,
     types::Type,
@@ -100,10 +100,12 @@ where
     /// # Arguments
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count<'c, Adapter>(&'q mut self, db_adapter: Adapter) -> Result<i64, Error>
+    pub async fn count<'c, C, Adapter>(&'q mut self, db_adapter: Adapter) -> Result<i64, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
         (i64,): for<'r> FromRow<'r, DB::Row>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         let (mut sql, arg, db_type, executor) = Self::render_sql_with_adapter(
             self.template.clone(),
@@ -125,14 +127,16 @@ where
     /// * `page_size` - Records per page
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count_page<'c, Adapter>(
+    pub async fn count_page<'c, C, Adapter>(
         &'q mut self,
 
         page_size: i64,
         db_adapter: Adapter,
     ) -> Result<PageInfo, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
         let count = self.count(db_adapter).await?;
@@ -147,7 +151,7 @@ where
     }
     /// Core SQL rendering method with pagination support
     #[inline]
-    pub async fn render_sql_with_adapter<'c, Adapter>(
+    pub async fn render_sql_with_adapter<'c, C, Adapter>(
         template: T,
 
         db_adapter: Adapter,
@@ -157,13 +161,14 @@ where
         (
             String,
             Option<DB::Arguments<'q>>,
-            impl DatabaseDialect,
-            impl Executor<'c, Database = DB>,
+            DBType,
+            AdapterExecutor<'c, DB, C>,
         ),
         Error,
     >
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
     {
         let (db_type, executor) = db_adapter.backend_db().await?;
         let f = db_type.get_encode_placeholder_fn();
@@ -181,19 +186,21 @@ where
     /// like sqlx::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
-    pub async fn execute<'c, Adapter>(
+    pub async fn execute<'c, C, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> Result<DB::QueryResult, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.execute_many(db_adapter).await.try_collect().await
     }
     /// like    sqlx::Query::execute_many
     /// Execute multiple queries and return the rows affected from each query, in a stream.
     #[inline]
-    pub async fn execute_many<'c, 'e, Adapter>(
+    pub async fn execute_many<'c, 'e, C, Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
@@ -201,7 +208,9 @@ where
     where
         'c: 'e,
         'q: 'e,
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch_many(db_adapter)
             .await
@@ -216,15 +225,17 @@ where
     /// like sqlx::Query::fetch
     /// Execute the query and return the generated results as a stream.
     #[inline]
-    pub async fn fetch<'c, 'e, Adapter>(
+    pub async fn fetch<'c, 'e, C, Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::Row, Error>>
     where
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
         'c: 'e,
         'q: 'e,
-        Adapter: BackendDB<'c, DB>,
     {
         self.fetch_many(db_adapter)
             .await
@@ -243,14 +254,16 @@ where
     /// then the `QueryResult` with the number of rows affected.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub async fn fetch_many<'c, 'e, Adapter>(
+    pub async fn fetch_many<'c, 'e, C, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, DB::Row>, Error>>
     where
         'c: 'e,
         'q: 'e,
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         let res = Self::render_sql_with_adapter(
             self.template.clone(),
@@ -280,12 +293,14 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all<'c, Adapter>(
+    pub async fn fetch_all<'c, C, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> Result<Vec<DB::Row>, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch(db_adapter).await.try_collect().await
     }
@@ -303,9 +318,14 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_one<'c, Adapter>(&'q mut self, db_adapter: Adapter) -> Result<DB::Row, Error>
+    pub async fn fetch_one<'c, C, Adapter>(
+        &'q mut self,
+        db_adapter: Adapter,
+    ) -> Result<DB::Row, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch_optional(db_adapter)
             .await
@@ -328,20 +348,22 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_optional<'c, Adapter>(
+    pub async fn fetch_optional<'c, C, Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> Result<Option<DB::Row>, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch(db_adapter).await.try_next().await
     }
 
     /// like sqlx::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
-    pub async fn fetch_as<'c, 'e, Adapter, O>(
+    pub async fn fetch_as<'c, 'e, C, Adapter, O>(
         &'q mut self,
 
         db_adapter: Adapter,
@@ -349,8 +371,10 @@ where
     where
         'c: 'e,
         'q: 'e,
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch_many_as(db_adapter)
             .await
@@ -360,15 +384,17 @@ where
     /// like sqlx::QueryAs::fetch_many
     /// Execute multiple queries and return the generated results as a stream
     /// from each query, in a stream.
-    pub async fn fetch_many_as<'c, 'e, Adapter, O>(
+    pub async fn fetch_many_as<'c, 'e, C, Adapter, O>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
         'c: 'e,
         'q: 'e,
+        C: Executor<'c, Database = DB> + 'c,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
-        Adapter: BackendDB<'c, DB>,
     {
         self.fetch_many(db_adapter)
             .await
@@ -388,12 +414,14 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all_as<'c, Adapter, O>(
+    pub async fn fetch_all_as<'c, C, Adapter, O>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> Result<Vec<O>, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         self.fetch_as(db_adapter).await.try_collect().await
@@ -411,10 +439,15 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_one_as<'c, Adapter, O>(&'q mut self, db_adapter: Adapter) -> Result<O, Error>
+    pub async fn fetch_one_as<'c, C, Adapter, O>(
+        &'q mut self,
+        db_adapter: Adapter,
+    ) -> Result<O, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch_optional_as(db_adapter)
             .await
@@ -433,13 +466,15 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_optional_as<'c, Adapter, O>(
+    pub async fn fetch_optional_as<'c, C, Adapter, O>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> Result<Option<O>, Error>
     where
-        Adapter: BackendDB<'c, DB>,
+        C: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'c, DB, C>,
+        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         let row = self.fetch_optional(db_adapter).await?;
