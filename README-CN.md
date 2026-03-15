@@ -24,10 +24,10 @@
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.2"  
-sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }  
-askama = "0.13.0"  
-tokio = { version = "1.0", features = ["full"] }  
+sqlx-askama-template = "0.3.5"
+sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
+tokio = { version = "1.0", features = ["full"] }
+env_logger = "0.11.9"
 ```  
 
 ## Quick Start  
@@ -35,36 +35,30 @@ tokio = { version = "1.0", features = ["full"] }
 ### Basic Usage  
 
 ```rust 
-use sqlx::any::install_default_drivers;
-use sqlx::{AnyPool, MySqlPool};
-use sqlx::{Executor, FromRow};
-use sqlx_askama_template::SqlTemplate;
+use sqlx::{AnyPool, Error, any::install_default_drivers};
 
+use sqlx_askama_template::{BackendDB, DBType, SqlTemplate};
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
 struct User {
     id: i64,
     name: String,
 }
 #[derive(SqlTemplate)]
-#[template(
-    ext = "txt",
-    source = r#"
+#[template(source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
     union all 
-    {% let id=99999_i64 %}
-    {% let name="super man" %}
+    {%- let id=99999_i64 %}
+    {%- let name="super man" %}
     select {{et(id)}} as id,{{et(name)}} as name
-"#
-)]
-#[addtype(&'q str)]
+"#)]
+#[add_type(&'q str)]
 pub struct UserQuery {
     pub user_id: i64,
     pub user_name: String,
 }
 
-#[tokio::main]
-async fn main() -> sqlx::Result<()> {
-    let users = vec![
+async fn simple_query(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
+    let users = [
         User {
             id: 1,
             name: "admin".to_string(),
@@ -74,55 +68,63 @@ async fn main() -> sqlx::Result<()> {
             name: "super man".to_string(),
         },
     ];
-
     let user_query = UserQuery {
         user_id: 1,
         user_name: "admin".to_string(),
     };
-    //pg
+    for (db_type, url) in urls {
+        let pool = AnyPool::connect(url).await?;
+        // pool
+        let user: Option<User> = user_query
+            .adapter_render()
+            .set_page(1, 1)
+            .fetch_optional_as(&pool)
+            .await?;
+        assert_eq!(user.as_ref(), users.first());
+        // connection
+        let mut conn = pool.acquire().await?;
+        let users1: Vec<User> = user_query
+            .adapter_render()
+            .set_page(1, 2)
+            .fetch_all_as(&mut *conn)
+            .await?;
+        assert_eq!(users1, users[1..]);
 
-    let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
-    let mut sql_buff = String::new();
-    let execute = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
+        // tx
+        let mut conn = pool.begin().await?;
+        let (get_db_type, _get_conn) = conn.backend_db().await?;
+        assert_eq!(db_type, get_db_type);
 
-    let rows = pool.fetch_all(execute).await?;
-    let mut db_users = Vec::new();
-    for row in &rows {
-        db_users.push(User::from_row(row)?);
+        let page_info = user_query
+            .adapter_render()
+            .count_page(1, &mut *conn)
+            .await?;
+
+        assert_eq!(page_info.total, 2);
+        assert_eq!(page_info.page_count, 2);
     }
-    assert_eq!(db_users, users);
 
-    //sqlite+any
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    unsafe {
+        std::env::set_var("RUST_LOG", "sqlx_askama_template=DEBUG");
+    }
+    env_logger::init();
+
     install_default_drivers();
-    let pool = AnyPool::connect("sqlite://db.file?mode=memory").await?;
-    let mut sql_buff = String::new();
-    let rows = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?
-        .fetch_all(&pool)
-        .await?;
+    let urls = vec![
+        (
+            DBType::PostgreSQL,
+            "postgres://postgres:postgres@localhost/postgres",
+        ),
+        (DBType::SQLite, "sqlite://db.file?mode=memory"),
+       // (DBType::MySQL, "mysql://root:root@localhost/mysql"),
+    ];
+    simple_query(urls).await?;
 
-    let mut db_users = Vec::new();
-    for row in &rows {
-        db_users.push(User::from_row(row)?);
-    }
-    assert_eq!(db_users, users);
-
-    //mysql
-
-    let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
-
-    let mut sql_buff = String::new();
-    let db_users: Vec<User> = user_query
-        .render_execute_able(&mut sql_buff)
-        .map_err(|e| sqlx::Error::Encode(Box::new(e)))?
-        .set_persistent(false)
-        .fetch_all_as(&pool)
-        .await?;
-
-    assert_eq!(db_users, users);
     Ok(())
 }
 

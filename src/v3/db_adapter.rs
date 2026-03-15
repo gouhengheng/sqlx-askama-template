@@ -1,5 +1,6 @@
-use std::{any::Any, marker::PhantomData, ops::Deref, pin::Pin};
+use std::{any::Any, marker::PhantomData, ops::Deref};
 
+use futures_core::future::BoxFuture;
 use futures_util::{FutureExt, TryStreamExt};
 use sqlx_core::{
     Either, Error,
@@ -197,28 +198,9 @@ where
 }
 
 /// Trait for database connections/pools that can detect their backend type
-///
-/// # Type Parameters
-/// - `'c`: Connection lifetime
-/// - `DB`: Database type implementing [`sqlx::Database`]
-///
-/// # Required Implementations
-/// Automatically implemented for types that:
-/// - Implement [`Executor`] for database operations
-/// - Implement [`Deref`] to an [`Any`] type
-///
-/// # Provided Methods
-/// [`backend_db`]: Default implementation using the module-level function
+#[allow(clippy::type_complexity)]
 pub trait BackendDB<'c, DB: Database, C: Executor<'c, Database = DB> + 'c>: Send {
-    fn backend_db(
-        self,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(DBType, AdapterExecutor<'c, DB, C>), Error>>
-                + Send
-                + 'c,
-        >,
-    >;
+    fn backend_db(self) -> BoxFuture<'c, Result<(DBType, AdapterExecutor<'c, DB, C>), Error>>;
 }
 impl<'c, DB, C, C1> BackendDB<'c, DB, C> for C
 where
@@ -227,15 +209,7 @@ where
     C1: Any,
     for<'c1> &'c1 mut DB::Connection: Executor<'c1, Database = DB>,
 {
-    fn backend_db(
-        self,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(DBType, AdapterExecutor<'c, DB, C>), Error>>
-                + Send
-                + 'c,
-        >,
-    > {
+    fn backend_db(self) -> BoxFuture<'c, Result<(DBType, AdapterExecutor<'c, DB, C>), Error>> {
         backend_db(self).boxed()
     }
 }

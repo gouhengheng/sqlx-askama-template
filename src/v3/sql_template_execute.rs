@@ -316,7 +316,7 @@ where
             .await
             .and_then(|row| row.ok_or(sqlx_core::Error::RowNotFound))
     }
-    /// like sqlx_core_core::QueryAs::fetch_optional
+    /// like sqlx_core::QueryAs::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
     ///
     /// ### Note: for best performance, ensure the query returns at most one row.
