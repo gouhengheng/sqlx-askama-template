@@ -107,7 +107,7 @@ async fn simple_query() -> Result<(), Error> {
 #[add_type(Option<&'a i64>,bool)]
 pub struct QueryData<'a, T>
 where
-    T: Sized,
+    T: Sized + Send + Sync,
 {
     arg1: i64,
     _arg1: i64, //same type

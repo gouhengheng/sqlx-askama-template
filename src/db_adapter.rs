@@ -18,7 +18,7 @@ use sqlx_core::{
 ///
 /// Provides a unified interface for handling database-specific SQL syntax variations,
 /// particularly for parameter binding, count queries, and pagination.
-pub trait DatabaseDialect {
+pub trait DatabaseDialect: Send + Sync {
     /// Returns the name of the database backend in use (e.g. PostgreSQL, MySQL, SQLite, etc.)
     fn backend_name(&self) -> &str;
     /// Gets placeholder generation function for parameter binding
@@ -210,7 +210,7 @@ where
 ///
 /// # Provided Methods
 /// [`backend_db`]: Default implementation using the module-level function
-pub trait BackendDB<'c, DB>
+pub trait BackendDB<'c, DB>: Send
 where
     DB: Database,
 {
@@ -233,6 +233,7 @@ where
         backend_db(self).await
     }
 }
+
 #[derive(Debug)]
 pub struct AdapterExecutor<'c, DB: Database, C: Executor<'c, Database = DB>> {
     executor: Either<C, PoolConnection<DB>>,
