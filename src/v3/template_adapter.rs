@@ -1,10 +1,10 @@
 use std::marker::PhantomData;
 
+use crate::SqlTemplate;
 use askama::Result;
-use futures_core::stream::BoxStream;
-use futures_util::{StreamExt, TryStreamExt, stream};
+use futures_core::{future::BoxFuture, stream::BoxStream};
 
-use crate::{AdapterExecutor, DBType, SqlTemplate};
+use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
 use sqlx_core::{
     Either, Error, database::Database, encode::Encode, executor::Executor, from_row::FromRow,
     types::Type,
@@ -87,7 +87,7 @@ where
 impl<'q, DB, T> DBAdapterManager<'q, DB, T>
 where
     DB: Database,
-    T: SqlTemplate<'q, DB>,
+    T: SqlTemplate<'q, DB> + Send + 'q,
     i64: Encode<'q, DB> + Type<DB>,
 {
     /// Configures query persistence (default: true)
@@ -100,12 +100,10 @@ where
     /// # Arguments
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count<'c, C, Adapter>(&'q mut self, db_adapter: Adapter) -> Result<i64, Error>
+    pub async fn count<Adapter>(&'q mut self, db_adapter: Adapter) -> Result<i64, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
         (i64,): for<'r> FromRow<'r, DB::Row>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         let (mut sql, arg, db_type, executor) = Self::render_sql_with_adapter(
             self.template.clone(),
@@ -127,16 +125,14 @@ where
     /// * `page_size` - Records per page
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count_page<'c, C, Adapter>(
+    pub async fn count_page<Adapter>(
         &'q mut self,
 
         page_size: i64,
         db_adapter: Adapter,
     ) -> Result<PageInfo, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
         let count = self.count(db_adapter).await?;
@@ -150,67 +146,68 @@ where
         self
     }
     /// Core SQL rendering method with pagination support
+    #[allow(clippy::type_complexity)]
     #[inline]
-    pub async fn render_sql_with_adapter<'c, C, Adapter>(
+    pub fn render_sql_with_adapter<Adapter>(
         template: T,
 
         db_adapter: Adapter,
         page_no: Option<i64>,
         page_size: Option<i64>,
-    ) -> Result<
-        (
-            String,
-            Option<DB::Arguments<'q>>,
-            DBType,
-            AdapterExecutor<'c, DB, C>,
-        ),
-        Error,
+    ) -> BoxFuture<
+        'q,
+        Result<
+            (
+                String,
+                Option<DB::Arguments<'q>>,
+                impl DatabaseDialect,
+                impl Executor<'q, Database = DB> + 'q,
+            ),
+            Error,
+        >,
     >
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
-        let (db_type, executor) = db_adapter.backend_db().await?;
-        let f = db_type.get_encode_placeholder_fn();
-        let mut sql = String::new();
-        let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
+        async move {
+            let (db_type, executor) = db_adapter.backend_db().await?;
+            let f = db_type.get_encode_placeholder_fn();
+            let mut sql = String::new();
+            let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
 
-        if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
-            let mut args = arg.unwrap_or_default();
-            db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
-            arg = Some(args);
+            if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
+                let mut args = arg.unwrap_or_default();
+                db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
+                arg = Some(args);
+            }
+            Ok((sql, arg, db_type, executor))
         }
-        Ok((sql, arg, db_type, executor))
+        .boxed()
     }
 
     /// like sqlx::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
-    pub async fn execute<'c, C, Adapter>(
+    pub async fn execute<'c, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> Result<DB::QueryResult, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         self.execute_many(db_adapter).await.try_collect().await
     }
     /// like    sqlx::Query::execute_many
     /// Execute multiple queries and return the rows affected from each query, in a stream.
     #[inline]
-    pub async fn execute_many<'c, 'e, C, Adapter>(
+    pub async fn execute_many<'e, Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::QueryResult, Error>>
     where
-        'c: 'e,
         'q: 'e,
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         self.fetch_many(db_adapter)
             .await
@@ -225,16 +222,13 @@ where
     /// like sqlx::Query::fetch
     /// Execute the query and return the generated results as a stream.
     #[inline]
-    pub async fn fetch<'c, 'e, C, Adapter>(
+    pub async fn fetch<'e, Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::Row, Error>>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
-        'c: 'e,
+        Adapter: BackendDB<'q, DB> + 'q,
         'q: 'e,
     {
         self.fetch_many(db_adapter)
@@ -254,16 +248,13 @@ where
     /// then the `QueryResult` with the number of rows affected.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub async fn fetch_many<'c, 'e, C, Adapter>(
+    pub async fn fetch_many<'e, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, DB::Row>, Error>>
     where
-        'c: 'e,
         'q: 'e,
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         let res = Self::render_sql_with_adapter(
             self.template.clone(),
@@ -293,14 +284,12 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all<'c, C, Adapter>(
+    pub async fn fetch_all<C, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> Result<Vec<DB::Row>, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         self.fetch(db_adapter).await.try_collect().await
     }
@@ -318,14 +307,9 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_one<'c, C, Adapter>(
-        &'q mut self,
-        db_adapter: Adapter,
-    ) -> Result<DB::Row, Error>
+    pub async fn fetch_one<Adapter>(&'q mut self, db_adapter: Adapter) -> Result<DB::Row, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         self.fetch_optional(db_adapter)
             .await
@@ -348,33 +332,28 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_optional<'c, C, Adapter>(
+    pub async fn fetch_optional<Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> Result<Option<DB::Row>, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
     {
         self.fetch(db_adapter).await.try_next().await
     }
 
     /// like sqlx::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
-    pub async fn fetch_as<'c, 'e, C, Adapter, O>(
+    pub async fn fetch_as<'e, Adapter, O>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<O, Error>>
     where
-        'c: 'e,
         'q: 'e,
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
+        Adapter: BackendDB<'q, DB> + 'q,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch_many_as(db_adapter)
             .await
@@ -384,16 +363,13 @@ where
     /// like sqlx::QueryAs::fetch_many
     /// Execute multiple queries and return the generated results as a stream
     /// from each query, in a stream.
-    pub async fn fetch_many_as<'c, 'e, C, Adapter, O>(
+    pub async fn fetch_many_as<'e, Adapter, O>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
-        'c: 'e,
         'q: 'e,
-        C: Executor<'c, Database = DB> + 'c,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
+        Adapter: BackendDB<'q, DB> + 'q,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         self.fetch_many(db_adapter)
@@ -414,14 +390,12 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all_as<'c, C, Adapter, O>(
+    pub async fn fetch_all_as<Adapter, O>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> Result<Vec<O>, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         self.fetch_as(db_adapter).await.try_collect().await
@@ -439,15 +413,10 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_one_as<'c, C, Adapter, O>(
-        &'q mut self,
-        db_adapter: Adapter,
-    ) -> Result<O, Error>
+    pub async fn fetch_one_as<Adapter, O>(&'q mut self, db_adapter: Adapter) -> Result<O, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
+        Adapter: BackendDB<'q, DB> + 'q,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
     {
         self.fetch_optional_as(db_adapter)
             .await
@@ -466,15 +435,13 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_optional_as<'c, C, Adapter, O>(
+    pub async fn fetch_optional_as<Adapter, O>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> Result<Option<O>, Error>
     where
-        C: Executor<'c, Database = DB> + 'c,
-        Adapter: BackendDB<'c, DB, C>,
-        AdapterExecutor<'c, DB, C>: Executor<'c, Database = DB> + 'c,
+        Adapter: BackendDB<'q, DB> + 'q,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
         let row = self.fetch_optional(db_adapter).await?;

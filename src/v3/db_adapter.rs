@@ -1,7 +1,6 @@
 use std::{any::Any, marker::PhantomData, ops::Deref};
 
-use futures_core::future::BoxFuture;
-use futures_util::{FutureExt, TryStreamExt};
+use futures_util::TryStreamExt;
 use sqlx_core::{
     Either, Error,
     any::{AnyConnection, AnyPool},
@@ -198,19 +197,27 @@ where
 }
 
 /// Trait for database connections/pools that can detect their backend type
-#[allow(clippy::type_complexity)]
-pub trait BackendDB<'c, DB: Database, C: Executor<'c, Database = DB> + 'c>: Send {
-    fn backend_db(self) -> BoxFuture<'c, Result<(DBType, AdapterExecutor<'c, DB, C>), Error>>;
+pub trait BackendDB<'c, DB>: Send
+where
+    DB: Database,
+{
+    type Executor: Executor<'c, Database = DB> + 'c;
+    type DatabaseDialect: DatabaseDialect;
+    fn backend_db(
+        self,
+    ) -> impl std::future::Future<Output = Result<(Self::DatabaseDialect, Self::Executor), Error>> + Send;
 }
-impl<'c, DB, C, C1> BackendDB<'c, DB, C> for C
+impl<'c, DB, C, C1> BackendDB<'c, DB> for C
 where
     DB: Database,
     C: Executor<'c, Database = DB> + 'c + Deref<Target = C1>,
     C1: Any,
     for<'c1> &'c1 mut DB::Connection: Executor<'c1, Database = DB>,
 {
-    fn backend_db(self) -> BoxFuture<'c, Result<(DBType, AdapterExecutor<'c, DB, C>), Error>> {
-        backend_db(self).boxed()
+    type DatabaseDialect = DBType;
+    type Executor = AdapterExecutor<'c, DB, C>;
+    async fn backend_db(self) -> Result<(Self::DatabaseDialect, Self::Executor), Error> {
+        backend_db(self).await
     }
 }
 #[derive(Debug)]

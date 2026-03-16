@@ -24,7 +24,7 @@
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.3.5"
+sqlx-askama-template = "0.3.6"
 sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
 tokio = { version = "1.0", features = ["full"] }
 env_logger = "0.11.9"

@@ -166,6 +166,9 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
     .await?;
     tx.rollback().await?;
     println!("{:?}", users);
+    let mut a = user_query.adapter_render();
+    let row = a.fetch(&pool);
+    drop(row);
     user_query.user_id = 2;
     user_query.user_name = "user";
 
