@@ -169,12 +169,14 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
     .await?;
     tx.rollback().await?;
     println!("{:?}", users);
+    let stream = user_query.adapter_render().fetch(&pool);
+    drop(stream);
     user_query.user_id = 2;
     user_query.user_name = "user";
 
     let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
     println!("{:?}", users);
-    let mut stream = user_query.adapter_render().fetch(&pool).await;
+    let mut stream = user_query.adapter_render().fetch(&pool);
 
     while let Some(row) = stream.try_next().await? {
         let (id, name): (i64, String) = <(i64, String) as FromRow<'_, AnyRow>>::from_row(&row)?;

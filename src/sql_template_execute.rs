@@ -111,16 +111,18 @@ where
         self.to_query().try_map(f)
     }
 }
-impl<DB> SqlTemplateExecute<DB>
+impl<'q, 'c, 'e, DB> SqlTemplateExecute<DB>
 where
     DB: Database,
+    'q: 'e,
+    'c: 'e,
+    Self: 'q,
 {
     /// like sqlx_core::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
-    pub async fn execute<'e, 'c: 'e, E>(self, executor: E) -> Result<DB::QueryResult, Error>
+    pub async fn execute<E>(self, executor: E) -> Result<DB::QueryResult, Error>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.execute(self).await
@@ -128,12 +130,8 @@ where
     /// like    sqlx_core::Query::execute_many
     /// Execute multiple queries and return the rows affected from each query, in a stream.
     #[inline]
-    pub fn execute_many<'e, 'c: 'e, E>(
-        self,
-        executor: E,
-    ) -> BoxStream<'e, Result<DB::QueryResult, Error>>
+    pub fn execute_many<E>(self, executor: E) -> BoxStream<'e, Result<DB::QueryResult, Error>>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         #[allow(deprecated)]
@@ -142,9 +140,8 @@ where
     /// like sqlx_core::Query::fetch
     /// Execute the query and return the generated results as a stream.
     #[inline]
-    pub fn fetch<'e, 'c: 'e, E>(self, executor: E) -> BoxStream<'e, Result<DB::Row, Error>>
+    pub fn fetch<E>(self, executor: E) -> BoxStream<'e, Result<DB::Row, Error>>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch(self)
@@ -156,12 +153,11 @@ where
     /// then the `QueryResult` with the number of rows affected.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub fn fetch_many<'e, 'c: 'e, E>(
+    pub fn fetch_many<E>(
         self,
         executor: E,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, DB::Row>, Error>>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         #[allow(deprecated)]
@@ -176,9 +172,8 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all<'e, 'c: 'e, E>(self, executor: E) -> Result<Vec<DB::Row>, Error>
+    pub async fn fetch_all<E>(self, executor: E) -> Result<Vec<DB::Row>, Error>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch_all(self).await
@@ -197,9 +192,8 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_one<'e, 'c: 'e, E>(self, executor: E) -> Result<DB::Row, Error>
+    pub async fn fetch_one<E>(self, executor: E) -> Result<DB::Row, Error>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch_one(self).await
@@ -218,9 +212,8 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_optional<'e, 'c: 'e, E>(self, executor: E) -> Result<Option<DB::Row>, Error>
+    pub async fn fetch_optional<E>(self, executor: E) -> Result<Option<DB::Row>, Error>
     where
-        DB::Arguments: 'e,
         E: Executor<'c, Database = DB>,
     {
         executor.fetch_optional(self).await
@@ -230,9 +223,8 @@ where
 
     /// like sqlx_core::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
-    pub fn fetch_as<'e, 'c: 'e, O, E>(self, executor: E) -> BoxStream<'e, Result<O, Error>>
+    pub fn fetch_as<O, E>(self, executor: E) -> BoxStream<'e, Result<O, Error>>
     where
-        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -244,12 +236,11 @@ where
     /// like sqlx_core::QueryAs::fetch_many
     /// Execute multiple queries and return the generated results as a stream
     /// from each query, in a stream.
-    pub fn fetch_many_as<'e, 'c: 'e, O, E>(
+    pub fn fetch_many_as<O, E>(
         self,
         executor: E,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
-        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -273,9 +264,8 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all_as<'e, 'c: 'e, O, E>(self, executor: E) -> Result<Vec<O>, Error>
+    pub async fn fetch_all_as<O, E>(self, executor: E) -> Result<Vec<O>, Error>
     where
-        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -295,9 +285,8 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_one_as<'e, 'c: 'e, O, E>(self, executor: E) -> Result<O, Error>
+    pub async fn fetch_one_as<O, E>(self, executor: E) -> Result<O, Error>
     where
-        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
@@ -319,9 +308,8 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_optional_as<'e, 'c: 'e, O, E>(self, executor: E) -> Result<Option<O>, Error>
+    pub async fn fetch_optional_as<O, E>(self, executor: E) -> Result<Option<O>, Error>
     where
-        DB::Arguments: 'e,
         E: 'e + Executor<'c, Database = DB>,
         DB: 'e,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
