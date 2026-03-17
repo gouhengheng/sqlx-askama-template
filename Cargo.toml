@@ -24,9 +24,10 @@ futures-core = "0.3.31"
 futures-util = "0.3.31"
 tracing = { version = "0.1" }
 log = "0.4.27"
+async-stream = "0.3.6"
 
 
-[dev-dependencies]
+#[dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = [
     "all-databases",
@@ -38,3 +39,4 @@ serde = "1.0.228"
 actix-web = "4.13.0"
 ntex = {version = "3.6.1", features = ["tokio"]}
 env_logger = "0.11.9"
+

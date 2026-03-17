@@ -9,7 +9,7 @@ pub use v3::*;
 /// SQL template trait
 ///
 /// Defines basic operations for rendering SQL from templates
-pub trait SqlTemplate<'q, DB>: Sized + Clone
+pub trait SqlTemplate<'q, DB>: Sized + Clone + 'q
 where
     DB: Database,
 {

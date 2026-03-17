@@ -4,10 +4,9 @@ use crate::SqlTemplate;
 use askama::Result;
 use futures_core::{future::BoxFuture, stream::BoxStream};
 
-use futures_util::{FutureExt, StreamExt, TryStreamExt, stream};
+use futures_util::{FutureExt, StreamExt, TryFutureExt, TryStreamExt, future};
 use sqlx_core::{
-    Either, Error, database::Database, encode::Encode, executor::Executor, from_row::FromRow,
-    types::Type,
+    Either, Error, database::Database, encode::Encode, from_row::FromRow, types::Type,
 };
 
 use super::{DatabaseDialect, db_adapter::BackendDB, sql_template_execute::SqlTemplateExecute};
@@ -84,11 +83,14 @@ where
         &self.sql
     }
 }
-impl<'q, DB, T> DBAdapterManager<'q, DB, T>
+impl<'q, 'c, 'e, DB, T> DBAdapterManager<'q, DB, T>
 where
-    DB: Database,
+    DB: Database + Sync,
     T: SqlTemplate<'q, DB> + Send + 'q,
     i64: Encode<'q, DB> + Type<DB>,
+    DB::Arguments<'q>: 'q,
+    'q: 'e,
+    'c: 'e,
 {
     /// Configures query persistence (default: true)
     pub fn set_persistent(mut self, persistent: bool) -> Self {
@@ -100,75 +102,14 @@ where
     /// # Arguments
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count<Adapter>(&'q mut self, db_adapter: Adapter) -> Result<i64, Error>
+    pub fn count<Adapter>(&'q mut self, db_adapter: Adapter) -> BoxFuture<'e, Result<i64, Error>>
     where
-        (i64,): for<'r> FromRow<'r, DB::Row>,
-        Adapter: BackendDB<'q, DB> + 'q,
-    {
-        let (mut sql, arg, db_type, executor) = Self::render_sql_with_adapter(
-            self.template.clone(),
-            db_adapter,
-            self.page_no,
-            self.page_size,
-        )
-        .await?;
-
-        db_type.write_count_sql(&mut sql);
-        self.sql = sql;
-        let execute = SqlTemplateExecute::new(&self.sql, arg).set_persistent(self.persistent);
-        let (count,): (i64,) = execute.fetch_one_as(executor).await?;
-        Ok(count)
-    }
-    /// Calculates complete pagination metadata
-    ///
-    /// # Arguments
-    /// * `page_size` - Records per page
-    /// * `db_adapter` - Database connection adapter
-    #[inline]
-    pub async fn count_page<Adapter>(
-        &'q mut self,
-
-        page_size: i64,
-        db_adapter: Adapter,
-    ) -> Result<PageInfo, Error>
-    where
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
-        let count = self.count(db_adapter).await?;
-
-        Ok(PageInfo::new(count, page_size))
-    }
-    /// Sets pagination parameters
-    pub fn set_page(mut self, page_size: i64, page_no: i64) -> Self {
-        self.page_no = Some(page_no);
-        self.page_size = Some(page_size);
-        self
-    }
-    /// Core SQL rendering method with pagination support
-    #[allow(clippy::type_complexity)]
-    #[inline]
-    pub fn render_sql_with_adapter<Adapter>(
-        template: T,
-
-        db_adapter: Adapter,
-        page_no: Option<i64>,
-        page_size: Option<i64>,
-    ) -> BoxFuture<
-        'q,
-        Result<
-            (
-                String,
-                Option<DB::Arguments<'q>>,
-                impl DatabaseDialect,
-                impl Executor<'q, Database = DB> + 'q,
-            ),
-            Error,
-        >,
-    >
-    where
-        Adapter: BackendDB<'q, DB> + 'q,
-    {
+        let template = self.template.clone();
+        let page_no = self.page_no;
+        let page_size = self.page_size;
         async move {
             let (db_type, executor) = db_adapter.backend_db().await?;
             let f = db_type.get_encode_placeholder_fn();
@@ -180,37 +121,66 @@ where
                 db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
                 arg = Some(args);
             }
-            Ok((sql, arg, db_type, executor))
+
+            db_type.write_count_sql(&mut sql);
+            self.sql = sql;
+            let execute = SqlTemplateExecute::new(&self.sql, arg).set_persistent(self.persistent);
+            let (count,): (i64,) = execute.fetch_one_as(executor).await?;
+            Ok(count)
         }
         .boxed()
+    }
+    /// Calculates complete pagination metadata
+    ///
+    /// # Arguments
+    /// * `page_size` - Records per page
+    /// * `db_adapter` - Database connection adapter
+    #[inline]
+    pub fn count_page<Adapter>(
+        &'q mut self,
+        page_size: i64,
+        db_adapter: Adapter,
+    ) -> BoxFuture<'e, Result<PageInfo, Error>>
+    where
+        Adapter: BackendDB<'c, DB> + 'c,
+        (i64,): for<'r> FromRow<'r, DB::Row>,
+    {
+        Box::pin(async move {
+            let count = self.count(db_adapter).await?;
+            Ok(PageInfo::new(count, page_size))
+        })
+    }
+    /// Sets pagination parameters
+    pub fn set_page(mut self, page_size: i64, page_no: i64) -> Self {
+        self.page_no = Some(page_no);
+        self.page_size = Some(page_size);
+        self
     }
 
     /// like sqlx::Query::execute
     /// Execute the query and return the number of rows affected.
     #[inline]
-    pub async fn execute<'c, Adapter>(
+    pub fn execute<Adapter>(
         &'q mut self,
         db_adapter: Adapter,
-    ) -> Result<DB::QueryResult, Error>
+    ) -> BoxFuture<'e, Result<DB::QueryResult, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
-        self.execute_many(db_adapter).await.try_collect().await
+        self.execute_many(db_adapter).try_collect().boxed()
     }
     /// like    sqlx::Query::execute_many
     /// Execute multiple queries and return the rows affected from each query, in a stream.
     #[inline]
-    pub async fn execute_many<'e, Adapter>(
+    pub fn execute_many<Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::QueryResult, Error>>
     where
-        'q: 'e,
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
         self.fetch_many(db_adapter)
-            .await
             .try_filter_map(|step| async move {
                 Ok(match step {
                     Either::Left(rows) => Some(rows),
@@ -222,17 +192,14 @@ where
     /// like sqlx::Query::fetch
     /// Execute the query and return the generated results as a stream.
     #[inline]
-    pub async fn fetch<'e, Adapter>(
+    pub fn fetch<Adapter>(
         &'q mut self,
-
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<DB::Row, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
-        'q: 'e,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
         self.fetch_many(db_adapter)
-            .await
             .try_filter_map(|step| async move {
                 Ok(match step {
                     Either::Left(_) => None,
@@ -248,31 +215,36 @@ where
     /// then the `QueryResult` with the number of rows affected.
     #[inline]
     #[allow(clippy::type_complexity)]
-    pub async fn fetch_many<'e, Adapter>(
+    pub fn fetch_many<Adapter>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, DB::Row>, Error>>
     where
-        'q: 'e,
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
-        let res = Self::render_sql_with_adapter(
-            self.template.clone(),
-            db_adapter,
-            self.page_no,
-            self.page_size,
-        )
-        .await;
+        let template = self.template.clone();
+        let page_no = self.page_no;
+        let page_size = self.page_size;
+        Box::pin(async_stream::try_stream! {
+              let (db_type, executor) = db_adapter.backend_db().await?;
+            let f = db_type.get_encode_placeholder_fn();
+            let mut sql = String::new();
+            let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
 
-        match res {
-            Ok((sql, arg, _db_type, executor)) => {
-                self.sql = sql;
-                let execute =
-                    SqlTemplateExecute::new(&self.sql, arg).set_persistent(self.persistent);
-                execute.fetch_many(executor)
+            if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
+                let mut args = arg.unwrap_or_default();
+                db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
+                arg = Some(args);
             }
-            Err(e) => stream::once(async move { Err(e) }).boxed(),
-        }
+
+           self.sql = sql;
+                    let execute =
+                        SqlTemplateExecute::new(&self.sql, arg).set_persistent(self.persistent);
+                    let mut stream = execute.fetch_many(executor);
+                    while let Some(item) = stream.try_next().await? {
+                        yield item;
+                    }
+        })
     }
 
     /// like sqlx::Query::fetch_all
@@ -284,14 +256,14 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all<C, Adapter>(
+    pub fn fetch_all<C, Adapter>(
         &'q mut self,
         db_adapter: Adapter,
-    ) -> Result<Vec<DB::Row>, Error>
+    ) -> BoxFuture<'e, Result<Vec<DB::Row>, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
-        self.fetch(db_adapter).await.try_collect().await
+        self.fetch(db_adapter).try_collect().boxed()
     }
     /// like sqlx::Query::fetch_one
     /// Execute the query, returning the first row or [`Error::RowNotFound`] otherwise.
@@ -307,16 +279,19 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_one<Adapter>(&'q mut self, db_adapter: Adapter) -> Result<DB::Row, Error>
+    pub fn fetch_one<Adapter>(
+        &'q mut self,
+        db_adapter: Adapter,
+    ) -> BoxFuture<'e, Result<DB::Row, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
         self.fetch_optional(db_adapter)
-            .await
             .and_then(|row| match row {
-                Some(row) => Ok(row),
-                None => Err(Error::RowNotFound),
+                Some(row) => future::ok(row),
+                None => future::err(Error::RowNotFound),
             })
+            .boxed()
     }
     /// like sqlx::Query::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
@@ -332,48 +307,45 @@ where
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
     #[inline]
-    pub async fn fetch_optional<Adapter>(
+    pub fn fetch_optional<Adapter>(
         &'q mut self,
 
         db_adapter: Adapter,
-    ) -> Result<Option<DB::Row>, Error>
+    ) -> BoxFuture<'e, Result<Option<DB::Row>, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
     {
-        self.fetch(db_adapter).await.try_next().await
+        Box::pin(async move { self.fetch(db_adapter).try_next().await })
     }
 
     /// like sqlx::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
-    pub async fn fetch_as<'e, Adapter, O>(
+    pub fn fetch_as<Adapter, O>(
         &'q mut self,
 
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<O, Error>>
     where
-        'q: 'e,
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         self.fetch_many_as(db_adapter)
-            .await
             .try_filter_map(|step| async move { Ok(step.right()) })
             .boxed()
     }
     /// like sqlx::QueryAs::fetch_many
     /// Execute multiple queries and return the generated results as a stream
     /// from each query, in a stream.
-    pub async fn fetch_many_as<'e, Adapter, O>(
+    pub fn fetch_many_as<Adapter, O>(
         &'q mut self,
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
         'q: 'e,
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         self.fetch_many(db_adapter)
-            .await
             .map(|v| match v {
                 Ok(Either::Right(row)) => O::from_row(&row).map(Either::Right),
                 Ok(Either::Left(v)) => Ok(Either::Left(v)),
@@ -390,15 +362,15 @@ where
     /// To avoid exhausting available memory, ensure the result set has a known upper bound,
     /// e.g. using `LIMIT`.
     #[inline]
-    pub async fn fetch_all_as<Adapter, O>(
+    pub fn fetch_all_as<Adapter, O>(
         &'q mut self,
         db_adapter: Adapter,
-    ) -> Result<Vec<O>, Error>
+    ) -> BoxFuture<'e, Result<Vec<O>, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
-        O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
+        Adapter: BackendDB<'c, DB> + 'c,
+        O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
-        self.fetch_as(db_adapter).await.try_collect().await
+        self.fetch_as(db_adapter).try_collect().boxed()
     }
     /// like sqlx::QueryAs::fetch_one
     /// Execute the query, returning the first row or [`Error::RowNotFound`] otherwise.
@@ -413,14 +385,20 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_one_as<Adapter, O>(&'q mut self, db_adapter: Adapter) -> Result<O, Error>
+    pub fn fetch_one_as<Adapter, O>(
+        &'q mut self,
+        db_adapter: Adapter,
+    ) -> BoxFuture<'e, Result<O, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
-        O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
+        Adapter: BackendDB<'c, DB> + 'c,
+        O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         self.fetch_optional_as(db_adapter)
-            .await
-            .and_then(|row| row.ok_or(Error::RowNotFound))
+            .and_then(|o| match o {
+                Some(o) => future::ok(o),
+                None => future::err(Error::RowNotFound),
+            })
+            .boxed()
     }
     /// like sqlx::QueryAs::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
@@ -435,20 +413,23 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_optional_as<Adapter, O>(
+    pub fn fetch_optional_as<Adapter, O>(
         &'q mut self,
 
         db_adapter: Adapter,
-    ) -> Result<Option<O>, Error>
+    ) -> BoxFuture<'e, Result<Option<O>, Error>>
     where
-        Adapter: BackendDB<'q, DB> + 'q,
+        Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
-        let row = self.fetch_optional(db_adapter).await?;
-        if let Some(row) = row {
-            O::from_row(&row).map(Some)
-        } else {
-            Ok(None)
-        }
+        self.fetch_optional(db_adapter)
+            .and_then(|opt_row| async move {
+                if let Some(row) = opt_row {
+                    O::from_row(&row).map(Some)
+                } else {
+                    Ok(None)
+                }
+            })
+            .boxed()
     }
 }
