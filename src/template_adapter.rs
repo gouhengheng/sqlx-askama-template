@@ -358,14 +358,17 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_one_as<Adapter, O>(self, db_adapter: Adapter) -> Result<O, Error>
+    pub fn fetch_one_as<Adapter, O>(self, db_adapter: Adapter) -> BoxFuture<'e, Result<O, Error>>
     where
         Adapter: BackendDB<'c, DB> + 'c,
-        O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
+        O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         self.fetch_optional_as(db_adapter)
-            .await
-            .and_then(|row| row.ok_or(Error::RowNotFound))
+            .and_then(|row| match row {
+                Some(row) => future::ok(row),
+                None => future::err(Error::RowNotFound),
+            })
+            .boxed()
     }
     /// like sqlx::QueryAs::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
@@ -380,20 +383,27 @@ where
     /// If your query has a `WHERE` clause filtering a unique column by a single value, you're good.
     ///
     /// Otherwise, you might want to add `LIMIT 1` to your query.
-    pub async fn fetch_optional_as<Adapter, O>(
+    pub fn fetch_optional_as<Adapter, O>(
         self,
-
         db_adapter: Adapter,
-    ) -> Result<Option<O>, Error>
+    ) -> BoxFuture<'e, Result<Option<O>, Error>>
     where
         Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
-        let row = self.fetch_optional(db_adapter).await?;
-        if let Some(row) = row {
-            O::from_row(&row).map(Some)
-        } else {
-            Ok(None)
-        }
+        Box::pin(async move {
+            self.fetch(db_adapter)
+                .try_next()
+                .map(|row| {
+                    row.and_then(|row| {
+                        if let Some(row) = row {
+                            O::from_row(&row).map(Some)
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                })
+                .await
+        })
     }
 }

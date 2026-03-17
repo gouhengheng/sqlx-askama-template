@@ -110,13 +110,13 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
     .adapter_render()
     .fetch_all_as(&mut *tx)
     .await?;
-    tx.rollback().await?;
-    println!("{:?}", users);
-    let stream = user_query.adapter_render().fetch(&pool);
-    drop(stream);
-    user_query.user_id = 2;
-    user_query.user_name = "user";
 
+    println!("{:?}", users);
+    let stream = user_query.adapter_render().fetch(&mut *tx);
+    drop(stream);
+    // user_query.user_id = 2;
+    //user_query.user_name = "user";
+    tx.rollback().await?;
     let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
     println!("{:?}", users);
     let mut stream = user_query.adapter_render().fetch(&pool);
