@@ -5,8 +5,8 @@ use axum::response::Html;
 use axum::routing::get;
 
 use sqlx::any::install_default_drivers;
-use sqlx::{AnyPool, Error};
-use sqlx_askama_template::SqlTemplate;
+use sqlx::{AnyPool, Error, Row};
+use sqlx_askama_template::{PageInfo, SqlTemplate};
 
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug, serde::Serialize)]
 struct User {
@@ -54,10 +54,19 @@ pub struct UserQuery<'a> {
 struct IndexHtml {
     users: Vec<User>,
 }
-
 async fn test_adapter_query(url: &str) -> Result<(), Error> {
+    let data = vec![
+        User {
+            id: 1,
+            name: "admin".to_string(),
+        },
+        User {
+            id: 99999,
+            name: "super man".to_string(),
+        },
+    ];
     //  test count
-    let mut user_query = UserQuery {
+    let user_query = UserQuery {
         user_id: 1,
         user_name: "admin",
     };
@@ -74,8 +83,8 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         .set_page(1, 1)
         .fetch_optional_as(&pool)
         .await?;
-
-    println!("{user:?}");
+    assert_eq!(data.first(), user.as_ref());
+    // println!("{user:?}");
 
     let mut conn = pool.acquire().await?;
     let user: Vec<User> = user_query
@@ -83,35 +92,67 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         .set_page(1, 2)
         .fetch_all_as(&mut *conn)
         .await?;
-
-    println!("{user:?}");
+    assert_eq!(data[1..], user);
+    // println!("{user:?}");
 
     let page_info = user_query.adapter_render().count_page(1, &pool).await?;
-
-    println!("{page_info:?}");
+    assert_eq!(PageInfo::new(2, 1), page_info);
+    // println!("{page_info:?}");
     //fecth
     let mut tx = pool.begin().await?;
-    let user: Vec<User> = user_query.adapter_render().fetch_all_as(&mut *tx).await?;
 
-    println!("{user:?}");
-
-    let users: Vec<User> = UserQuery {
+    let rows = UserQuery {
         user_id: 1,
         user_name: "admin",
     }
     .adapter_render()
-    .fetch_all_as(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
-    tx.rollback().await?;
-    println!("{:?}", users);
-    let mut render = user_query.adapter_render();
-    let stream = render.fetch(&pool);
-    drop(stream);
-    user_query.user_id = 2;
-    user_query.user_name = "user";
-
+    assert_eq!(2, rows.len());
+    //println!("{:?}", rows.len());
+    let row = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_optional(&mut *tx)
+    .await?;
+    assert!(row.is_some());
+    let row = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_one(&mut *tx)
+    .await?;
+    assert_eq!(2, row.columns().len());
+    // fetch_as
     let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
-    println!("{:?}", users);
+    assert_eq!(data, users);
+    //println!("{:?}", users);
+
+    let u: Option<User> = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_optional_as(&mut *tx)
+    .await?;
+    assert_eq!(data.first(), u.as_ref());
+    let u: User = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_one_as(&mut *tx)
+    .await?;
+    assert_eq!(data.first(), Some(&u));
+
+    // stream
+    let mut a = user_query.adapter_render();
+    let row = a.fetch(&mut *tx);
+    drop(row);
+    tx.rollback().await?;
 
     Ok(())
 }
