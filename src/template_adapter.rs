@@ -422,14 +422,11 @@ where
         Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
-        self.fetch_optional(db_adapter)
-            .and_then(|opt_row| async move {
-                if let Some(row) = opt_row {
-                    O::from_row(&row).map(Some)
-                } else {
-                    Ok(None)
-                }
-            })
-            .await
+        let row = self.fetch_many_as(db_adapter).try_next().await?;
+        match row {
+            Some(Either::Right(o)) => Ok(Some(o)),
+            Some(Either::Left(_)) => Ok(None),
+            None => Ok(None),
+        }
     }
 }
