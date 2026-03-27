@@ -24,7 +24,7 @@
 
 ```toml  
 [dependencies]  
-sqlx-askama-template = "0.3.7"
+sqlx-askama-template = "0.3.8"
 sqlx = { version = "0.8", features = ["all-databases", "runtime-tokio"] }
 tokio = { version = "1.0", features = ["full"] }
 env_logger = "0.11.9"
@@ -35,9 +35,14 @@ env_logger = "0.11.9"
 ### Basic Usage  
 
 ```rust 
-use sqlx::{AnyPool, Error, any::install_default_drivers};
+use futures_util::pin_mut;
+use futures_util::stream::TryStreamExt;
+use sqlx::Row;
+use sqlx::any::install_default_drivers;
+use sqlx::{AnyPool, Error};
 
-use sqlx_askama_template::{BackendDB, DBType, SqlTemplate};
+use sqlx_askama_template::{DBType, PageInfo, SqlTemplate};
+
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
 struct User {
     id: i64,
@@ -51,82 +56,142 @@ struct User {
     {%- let name="super man" %}
     select {{et(id)}} as id,{{et(name)}} as name
 "#)]
-#[add_type(&'q str)]
-pub struct UserQuery {
+pub struct UserQuery<'a> {
     pub user_id: i64,
-    pub user_name: String,
+    pub user_name: &'a str,
 }
 
-async fn simple_query(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
-    let users = [
+async fn test_adapter_query(url: &str) -> Result<(), Error> {
+    let data = vec![
         User {
             id: 1,
             name: "admin".to_string(),
         },
         User {
-            id: 99999_i64,
+            id: 99999,
             name: "super man".to_string(),
         },
     ];
+    //  test count
     let user_query = UserQuery {
         user_id: 1,
-        user_name: "admin".to_string(),
+        user_name: "admin",
     };
-    for (db_type, url) in urls {
-        let pool = AnyPool::connect(url).await?;
-        // pool
-        let user: Option<User> = user_query
-            .adapter_render()
-            .set_page(1, 1)
-            .fetch_optional_as(&pool)
-            .await?;
-        assert_eq!(user.as_ref(), users.first());
-        // connection
-        let mut conn = pool.acquire().await?;
-        let users1: Vec<User> = user_query
-            .adapter_render()
-            .set_page(1, 2)
-            .fetch_all_as(&mut *conn)
-            .await?;
-        assert_eq!(users1, users[1..]);
+    let pool = AnyPool::connect(url).await?;
 
-        // tx
-        let mut conn = pool.begin().await?;
-        let (get_db_type, _get_conn) = conn.backend_db().await?;
-        assert_eq!(db_type, get_db_type);
+    let mut db_adatper = user_query.adapter_render();
 
-        let page_info = user_query
-            .adapter_render()
-            .count_page(1, &mut *conn)
-            .await?;
+    let count = db_adatper.count(&pool).await?;
+    assert_eq!(2, count);
 
-        assert_eq!(page_info.total, 2);
-        assert_eq!(page_info.page_count, 2);
+    // test pagination
+    let user: Option<User> = user_query
+        .adapter_render()
+        .set_page(1, 1)
+        .fetch_optional_as(&pool)
+        .await?;
+    assert_eq!(data.first(), user.as_ref());
+    // println!("{user:?}");
+
+    let mut conn = pool.acquire().await?;
+    let user: Vec<User> = user_query
+        .adapter_render()
+        .set_page(1, 2)
+        .fetch_all_as(&mut *conn)
+        .await?;
+    assert_eq!(data[1..], user);
+    // println!("{user:?}");
+
+    let page_info = user_query.adapter_render().count_page(1, &pool).await?;
+    assert_eq!(PageInfo::new(2, 1), page_info);
+    // println!("{page_info:?}");
+    //fecth
+    let mut tx = pool.begin().await?;
+
+    let rows = UserQuery {
+        user_id: 1,
+        user_name: "admin",
     }
+    .adapter_render()
+    .fetch_all(&mut *tx)
+    .await?;
+    assert_eq!(2, rows.len());
+    //println!("{:?}", rows.len());
+    let row = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_optional(&mut *tx)
+    .await?;
+    assert!(row.is_some());
+    let row = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_one(&mut *tx)
+    .await?;
+    assert_eq!(2, row.columns().len());
+    // fetch_as
+    let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
+    assert_eq!(data, users);
+    //println!("{:?}", users);
+
+    let u: Option<User> = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_optional_as(&mut *tx)
+    .await?;
+    assert_eq!(data.first(), u.as_ref());
+    let u: User = UserQuery {
+        user_id: 1,
+        user_name: "admin",
+    }
+    .adapter_render()
+    .fetch_one_as(&mut *tx)
+    .await?;
+    assert_eq!(data.first(), Some(&u));
+
+    // stream
+    let mut query = user_query.adapter_render();
+    {
+        let stream = query.fetch(&mut *tx);
+        pin_mut!(stream);
+        while let Some(row) = stream.try_next().await? {
+            assert_eq!(2, row.columns().len());
+        }
+    }
+
+    tx.rollback().await?;
 
     Ok(())
 }
-
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    install_default_drivers();
     unsafe {
         std::env::set_var("RUST_LOG", "sqlx_askama_template=DEBUG");
     }
     env_logger::init();
-
-    install_default_drivers();
     let urls = vec![
         (
             DBType::PostgreSQL,
             "postgres://postgres:postgres@localhost/postgres",
         ),
         (DBType::SQLite, "sqlite://db.file?mode=memory"),
-       // (DBType::MySQL, "mysql://root:root@localhost/mysql"),
+        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
     ];
-    simple_query(urls).await?;
+    for (db_type, url) in urls {
+        println!("Testing database: {db_type:?}");
+        test_adapter_query(url).await?;
+    }
 
     Ok(())
 }
+
 
 ```  
 

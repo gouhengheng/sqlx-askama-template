@@ -1,6 +1,6 @@
 [package]
 name = "sqlx-askama-template"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 license = "Apache-2.0"
 description = "Type-safe SQL templates with Askama and SQLx"
@@ -8,6 +8,7 @@ repository = "https://github.com/gouhengheng/sqlx-askama-template"
 readme = "README.md"
 keywords = ["sqlx", "askama", "database", "template"]
 categories = ["database", "template-engine"]
+rust-version = "1.92.0"
 
 [workspace]
 members = [".", "sqlx-askama-template-macro"]
@@ -27,7 +28,7 @@ log = "0.4.27"
 async-stream = "0.3.6"
 
 
-[dev-dependencies]
+#[dev-dependencies]
 tokio = { version = "1.0", features = ["full"] }
 sqlx = { version = "0.8", default-features = false, features = [
     "all-databases",

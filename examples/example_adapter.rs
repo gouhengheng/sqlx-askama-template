@@ -1,3 +1,5 @@
+use futures_util::pin_mut;
+use futures_util::stream::TryStreamExt;
 use sqlx::postgres::PgListener;
 use sqlx::{AnyPool, Error, any::install_default_drivers};
 use sqlx::{MySqlPool, PgPool, Row, SqlitePool};
@@ -212,9 +214,15 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
     assert_eq!(data.first(), Some(&u));
 
     // stream
-    let mut a = user_query.adapter_render();
-    let row = a.fetch(&mut *tx);
-    drop(row);
+    let mut query = user_query.adapter_render();
+    {
+        let stream = query.fetch(&mut *tx);
+        pin_mut!(stream);
+        while let Some(row) = stream.try_next().await? {
+            assert_eq!(2, row.columns().len());
+        }
+    }
+
     tx.rollback().await?;
 
     Ok(())

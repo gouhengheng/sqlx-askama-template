@@ -108,19 +108,12 @@ where
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
         let template = self.template.clone();
-        let page_no = self.page_no;
-        let page_size = self.page_size;
+
         async move {
             let (db_type, executor) = db_adapter.backend_db().await?;
             let f = db_type.get_encode_placeholder_fn();
             let mut sql = String::new();
-            let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
-
-            if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
-                let mut args = arg.unwrap_or_default();
-                db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
-                arg = Some(args);
-            }
+            let arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
 
             db_type.write_count_sql(&mut sql);
             self.sql = sql;
@@ -337,7 +330,6 @@ where
         db_adapter: Adapter,
     ) -> BoxStream<'e, Result<Either<DB::QueryResult, O>, Error>>
     where
-        'q: 'e,
         Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
@@ -434,14 +426,11 @@ where
         Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row>,
     {
-        self.fetch_optional(db_adapter)
-            .and_then(|opt_row| async move {
-                if let Some(row) = opt_row {
-                    O::from_row(&row).map(Some)
-                } else {
-                    Ok(None)
-                }
-            })
-            .await
+        let obj = self.fetch_many_as(db_adapter).try_next().await?;
+        match obj {
+            Some(Either::Right(o)) => Ok(Some(o)),
+            Some(Either::Left(_)) => Ok(None),
+            None => Ok(None),
+        }
     }
 }

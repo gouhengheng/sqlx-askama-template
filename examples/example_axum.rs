@@ -4,6 +4,7 @@ use axum::extract::State;
 use axum::response::Html;
 use axum::routing::get;
 
+use futures_util::{TryStreamExt, pin_mut};
 use sqlx::any::install_default_drivers;
 use sqlx::{AnyPool, Error, Row};
 use sqlx_askama_template::{PageInfo, SqlTemplate};
@@ -149,9 +150,15 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
     assert_eq!(data.first(), Some(&u));
 
     // stream
-    let mut a = user_query.adapter_render();
-    let row = a.fetch(&mut *tx);
-    drop(row);
+    let mut query = user_query.adapter_render();
+    {
+        let stream = query.fetch(&mut *tx);
+        pin_mut!(stream);
+        while let Some(row) = stream.try_next().await? {
+            assert_eq!(2, row.columns().len());
+        }
+    }
+
     tx.rollback().await?;
 
     Ok(())
