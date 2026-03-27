@@ -1,8 +1,9 @@
+use futures_util::TryStreamExt;
+use futures_util::pin_mut;
 use sqlx::postgres::PgListener;
 use sqlx::{AnyPool, Error, any::install_default_drivers};
 use sqlx::{MySqlPool, PgPool, Row, SqlitePool};
-
-use sqlx_askama_template::{BackendDB, DatabaseDialect, PageInfo, SqlTemplate};
+use sqlx_askama_template::{BackendDB, DatabaseDialect, PaginationInfo, SqlTemplate};
 
 use sqlx_askama_template::DBType;
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
@@ -13,7 +14,7 @@ struct User {
 #[derive(SqlTemplate)]
 #[template(source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
-    union all 
+    union all
     {%- let id=99999_i64 %}
     {%- let name="super man" %}
     select {{e(id)}} as id,{{e(name)}} as name
@@ -116,7 +117,6 @@ async fn test_backend(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
 
     Ok(())
 }
-
 async fn test_adapter_query(url: &str) -> Result<(), Error> {
     let data = vec![
         User {
@@ -129,21 +129,21 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         },
     ];
     //  test count
-    let user_query = UserQuery {
+    let mut user_query = UserQuery {
         user_id: 1,
         user_name: "admin",
     };
     let pool = AnyPool::connect(url).await?;
 
-    let db_adatper = user_query.adapter_render();
+    let db_adatper = user_query.adapter();
 
     let count = db_adatper.count(&pool).await?;
     assert_eq!(2, count);
 
     // test pagination
     let user: Option<User> = user_query
-        .adapter_render()
-        .set_page(1, 1)
+        .adapter()
+        .set_pagination(1, 1)
         .fetch_optional_as(&pool)
         .await?;
     assert_eq!(data.first(), user.as_ref());
@@ -151,15 +151,15 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
 
     let mut conn = pool.acquire().await?;
     let user: Vec<User> = user_query
-        .adapter_render()
-        .set_page(1, 2)
+        .adapter()
+        .set_pagination(1, 2)
         .fetch_all_as(&mut *conn)
         .await?;
     assert_eq!(data[1..], user);
     // println!("{user:?}");
 
-    let page_info = user_query.adapter_render().count_page(1, &pool).await?;
-    assert_eq!(PageInfo::new(2, 1), page_info);
+    let page_info = user_query.adapter().pagination_info(1, &pool).await?;
+    assert_eq!(PaginationInfo::new(2, 1), page_info);
     // println!("{page_info:?}");
     //fecth
     let mut tx = pool.begin().await?;
@@ -168,7 +168,7 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         user_id: 1,
         user_name: "admin",
     }
-    .adapter_render()
+    .adapter()
     .fetch_all(&mut *tx)
     .await?;
     assert_eq!(2, rows.len());
@@ -177,7 +177,7 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         user_id: 1,
         user_name: "admin",
     }
-    .adapter_render()
+    .adapter()
     .fetch_optional(&mut *tx)
     .await?;
     assert!(row.is_some());
@@ -185,12 +185,12 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         user_id: 1,
         user_name: "admin",
     }
-    .adapter_render()
+    .adapter()
     .fetch_one(&mut *tx)
     .await?;
     assert_eq!(2, row.columns().len());
     // fetch_as
-    let users: Vec<User> = user_query.adapter_render().fetch_all_as(&pool).await?;
+    let users: Vec<User> = user_query.adapter().fetch_all_as(&pool).await?;
     assert_eq!(data, users);
     //println!("{:?}", users);
 
@@ -198,7 +198,7 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         user_id: 1,
         user_name: "admin",
     }
-    .adapter_render()
+    .adapter()
     .fetch_optional_as(&mut *tx)
     .await?;
     assert_eq!(data.first(), u.as_ref());
@@ -206,21 +206,27 @@ async fn test_adapter_query(url: &str) -> Result<(), Error> {
         user_id: 1,
         user_name: "admin",
     }
-    .adapter_render()
+    .adapter()
     .fetch_one_as(&mut *tx)
     .await?;
     assert_eq!(data.first(), Some(&u));
 
     // stream
-    let a = user_query.adapter_render();
-    let row = a.fetch(&mut *tx);
-    drop(row);
-    tx.rollback().await?;
+    let query = user_query.adapter();
+    {
+        let stream = query.fetch(&mut *tx);
+        pin_mut!(stream);
+        while let Some(row) = stream.try_next().await? {
+            assert_eq!(2, row.columns().len());
+        }
+    }
 
+    tx.rollback().await?;
+    user_query.user_id = 1;
     Ok(())
 }
-#[tokio::main]
-async fn main() -> Result<(), Error> {
+
+async fn run() -> Result<(), Error> {
     unsafe {
         std::env::set_var("RUST_LOG", "sqlx_askama_template=DEBUG");
     }
@@ -236,4 +242,8 @@ async fn main() -> Result<(), Error> {
     test_backend(urls).await?;
 
     Ok(())
+}
+
+fn main() -> Result<(), Error> {
+    smol::block_on(run())
 }

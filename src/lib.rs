@@ -28,26 +28,26 @@ where
     /// based on their index.
     ///
     /// # Parameters
-    /// - `f`: Optional function to format parameter placeholders (receives index and buffer)
+    /// - `format_placeholder`: Optional function to format parameter placeholders (receives index and buffer)
     /// - `sql_buffer`: Mutable string buffer to store the rendered SQL
     ///
     /// # Returns
     /// Encoded database arguments (None if no parameters) or an error if rendering fails
-    fn render_sql_with_encode_placeholder_fn(
+    fn render_with_placeholder(
         self,
-        f: Option<fn(usize, &mut String)>,
+        format_placeholder: Option<fn(usize, &mut String)>,
         sql_buffer: &mut String,
     ) -> Result<Option<DB::Arguments>, Error>;
     /// Renders SQL template and returns query string with parameters
-    fn render_sql(self) -> Result<(String, Option<DB::Arguments>), Error> {
+    fn render(self) -> Result<(String, Option<DB::Arguments>), Error> {
         let mut sql_buff = String::new();
-        let arg = self.render_sql_with_encode_placeholder_fn(None, &mut sql_buff)?;
+        let arg = self.render_with_placeholder(None, &mut sql_buff)?;
         Ok((sql_buff, arg))
     }
 
     /// Renders SQL template and returns executable query result
     fn render_executable(self) -> Result<SqlTemplateExecute<DB>, Error> {
-        let (sql, arguments) = self.render_sql()?;
+        let (sql, arguments) = self.render()?;
 
         Ok(SqlTemplateExecute {
             sql,
@@ -56,14 +56,14 @@ where
         })
     }
 
-    /// Creates a database adapter manager for the template
+    /// Creates a database adapter  for the template
     ///
     /// Provides an adapter pattern interface for managing template rendering
     /// in database-specific scenarios.
     ///
     /// # Returns
-    /// A new `DBAdapterManager` instance wrapping the template
-    fn adapter_render(self) -> DBAdapterManager<'q, DB, Self> {
-        DBAdapterManager::new(self)
+    /// A new `DBAdapter` instance wrapping the template
+    fn adapter(self) -> DBAdapter<'q, DB, Self> {
+        DBAdapter::new(self)
     }
 }

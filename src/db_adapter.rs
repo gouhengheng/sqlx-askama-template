@@ -29,7 +29,7 @@ pub trait DatabaseDialect: Send + Sync {
     ///
     /// # Returns
     /// Option<fn(usize, &mut String)> placeholder generation function
-    fn get_encode_placeholder_fn(&self) -> Option<fn(usize, &mut String)>;
+    fn placeholder_fn(&self) -> Option<fn(usize, &mut String)>;
     /// Wraps SQL in count query
     ///
     /// # Arguments
@@ -39,17 +39,17 @@ pub trait DatabaseDialect: Send + Sync {
     ///
     /// # Arguments
     /// * `sql` - Original SQL statement to modify
-    /// * `page_size` - Items per page
-    /// * `page_no` - Page number (auto-corrected to >=1)
+    /// * `pagination_size` - Items per pagination
+    /// * `pagination_no` - Pagination number (auto-corrected to >=1)
     /// * `arg` - SQL arguments container
     ///
     /// # Note
-    /// Automatically handles invalid page numbers
-    fn write_page_sql<'c, 'q, DB>(
+    /// Automatically handles invalid pagination numbers
+    fn write_pagination_sql<'q, DB>(
         &self,
         sql: &mut String,
-        page_size: i64,
-        page_no: i64,
+        pagination_size: i64,
+        pagination_no: i64,
         arg: &mut DB::Arguments,
     ) -> Result<(), Error>
     where
@@ -85,7 +85,7 @@ impl DBType {
             "PostgreSQL" => Ok(Self::PostgreSQL),
             "MySQL" => Ok(Self::MySQL),
             "SQLite" => Ok(Self::SQLite),
-            _ => Err(Error::Protocol(format!("unsupport db `{db_name}`"))),
+            _ => Err(Error::Protocol(format!("unsupported db `{db_name}`"))),
         }
     }
 }
@@ -106,7 +106,7 @@ impl DatabaseDialect for DBType {
     ///
     /// # Returns
     /// Option<fn(usize, &mut String)> placeholder generation function
-    fn get_encode_placeholder_fn(&self) -> Option<fn(usize, &mut String)> {
+    fn placeholder_fn(&self) -> Option<fn(usize, &mut String)> {
         match self {
             Self::PostgreSQL => Some(|i: usize, s: &mut String| s.push_str(&format!("${i}"))),
             Self::MySQL | Self::SQLite => Some(|_: usize, s: &mut String| s.push('?')),
@@ -127,17 +127,17 @@ impl DatabaseDialect for DBType {
     ///
     /// # Arguments
     /// * `sql` - Original SQL statement to modify
-    /// * `page_size` - Items per page
-    /// * `page_no` - Page number (auto-corrected to >=1)
+    /// * `pagination_size` - Items per pagination
+    /// * `pagination_no` - Pagination number (auto-corrected to >=1)
     /// * `arg` - SQL arguments container
     ///
     /// # Note
-    /// Automatically handles invalid page numbers
-    fn write_page_sql<'c, 'q, DB>(
+    /// Automatically handles invalid pagination numbers
+    fn write_pagination_sql<'q, DB>(
         &self,
         sql: &mut String,
-        page_size: i64,
-        page_no: i64,
+        pagination_size: i64,
+        pagination_no: i64,
 
         arg: &mut DB::Arguments,
     ) -> Result<(), Error>
@@ -145,22 +145,25 @@ impl DatabaseDialect for DBType {
         DB: Database,
         i64: Encode<'q, DB> + Type<DB>,
     {
-        let f = self.get_encode_placeholder_fn();
+        let f = self.placeholder_fn();
         match self {
             Self::PostgreSQL | DBType::MySQL | DBType::SQLite => {
-                pg_mysql_sqlite_page_sql(sql, page_size, page_no, f, arg)?;
+                pg_mysql_sqlite_pagination_sql(sql, pagination_size, pagination_no, f, arg)?;
                 Ok(())
             }
         }
     }
 }
+
+/// Generates count SQL query wrapping the original SQL for PostgreSQL/MySQL/SQLite databases
 fn pg_mysql_sqlite_count_sql(sql: &mut String) {
     *sql = format!("select count(1) from ({sql}) t")
 }
-fn pg_mysql_sqlite_page_sql<'c, 'q, DB>(
+/// Generates pagination SQL clause for PostgreSQL/MySQL/SQLite databases
+fn pg_mysql_sqlite_pagination_sql<'q, DB>(
     sql: &mut String,
-    mut page_size: i64,
-    mut page_no: i64,
+    mut pagination_size: i64,
+    mut pagination_no: i64,
     f: Option<fn(usize, &mut String)>,
     arg: &mut DB::Arguments,
 ) -> Result<(), Error>
@@ -168,23 +171,23 @@ where
     DB: Database,
     i64: Encode<'q, DB> + Type<DB>,
 {
-    if page_size < 1 {
-        page_size = 1
+    if pagination_size < 1 {
+        pagination_size = 1
     }
-    if page_no < 1 {
-        page_no = 1
+    if pagination_no < 1 {
+        pagination_no = 1
     }
-    let offset = (page_no - 1) * page_size;
+    let offset = (pagination_no - 1) * pagination_size;
     if let Some(f) = f {
         sql.push_str(" limit ");
-        arg.add(page_size).map_err(Error::Encode)?;
+        arg.add(pagination_size).map_err(Error::Encode)?;
         f(arg.len(), sql);
         sql.push_str(" offset ");
         arg.add(offset).map_err(Error::Encode)?;
         f(arg.len(), sql);
     } else {
         sql.push_str(" limit ");
-        arg.add(page_size).map_err(Error::Encode)?;
+        arg.add(pagination_size).map_err(Error::Encode)?;
         arg.format_placeholder(sql)
             .map_err(|e| Error::Encode(Box::new(e)))?;
 
@@ -230,7 +233,7 @@ where
     type DatabaseDialect = DBType;
     type Executor = AdapterExecutor<'c, DB, C>;
     async fn backend_db(self) -> Result<(Self::DatabaseDialect, Self::Executor), Error> {
-        backend_db(self).await
+        detect_backend_db(self).await
     }
 }
 
@@ -333,11 +336,19 @@ where
         }
     }
 }
-pub async fn backend_db<'c, DB, C, C1>(c: C) -> Result<(DBType, AdapterExecutor<'c, DB, C>), Error>
+/// Detect the real database type from the executor.
+/// params
+///  - c: The executor.
+///
+/// returns
+///  - (DBType, AdapterExecutor<'c, DB, C>): The database type and the adapter executor.
+pub async fn detect_backend_db<'c, DB, C, C1>(
+    c: C,
+) -> Result<(DBType, AdapterExecutor<'c, DB, C>), Error>
 where
     DB: Database,
     C: Executor<'c, Database = DB> + 'c + Deref<Target = C1>,
-    C1: Any + 'static,
+    C1: Any,
 {
     if DB::NAME != sqlx_core::any::Any::NAME {
         return Ok((
@@ -347,7 +358,7 @@ where
     }
 
     let any_ref = c.deref() as &dyn Any;
-    // 处理 AnyConnection
+    //处理 AnyConnection
     if let Some(conn) = any_ref.downcast_ref::<AnyConnection>() {
         return Ok((
             DBType::new(conn.backend_name())?,
@@ -355,7 +366,7 @@ where
         ));
     }
 
-    // 处理 AnyPool
+    //处理 AnyPool
     if let Some(pool) = any_ref.downcast_ref::<AnyPool>() {
         let conn = pool.acquire().await?;
 
@@ -363,9 +374,9 @@ where
         let db_con: Box<dyn Any> = Box::new(conn);
         let return_con = db_con
             .downcast::<PoolConnection<DB>>()
-            .map_err(|_| Error::Protocol(format!("unsupport db `{}`", DB::NAME)))?;
+            .map_err(|_| Error::Protocol(format!("unsupported db `{}`", DB::NAME)))?;
 
         return Ok((db_type, AdapterExecutor::new(Either::Right(*return_con))));
     }
-    Err(Error::Protocol(format!("unsupport db `{}`", DB::NAME)))
+    Err(Error::Protocol(format!("unsupported db `{}`", DB::NAME)))
 }

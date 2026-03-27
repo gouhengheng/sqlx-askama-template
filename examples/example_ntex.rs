@@ -15,7 +15,7 @@ struct User {
 #[derive(SqlTemplate)]
 #[template(source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
-    union all 
+    union all
     {%- let id=99999_i64 %}
     {%- let name="super man" %}
     select {{e(id)}} as id,{{e(name)}} as name
@@ -44,7 +44,7 @@ pub struct UserQuery<'a> {
             {% for user in users %}
             <tr>
                 <td>{{ user.id }}</td>
-                <td>{{ user.name }}</td>    
+                <td>{{ user.name }}</td>
             </tr>
             {% endfor %}
     </body>
@@ -59,15 +59,11 @@ async fn root(pool: State<AnyPool>) -> impl Responder {
         user_id: 1,
         user_name: "ntex",
     };
-    let count = user_query.adapter_render().count(&*pool).await.unwrap();
+    let count = user_query.adapter().count(&*pool).await.unwrap();
     println!("count: {count}");
 
     let mut conn = pool.acquire().await.unwrap();
-    let users: Vec<User> = user_query
-        .adapter_render()
-        .fetch_all_as(&mut *conn)
-        .await
-        .unwrap();
+    let users: Vec<User> = user_query.adapter().fetch_all_as(&mut *conn).await.unwrap();
 
     Response::Ok().body(IndexHtml { users }.render().unwrap())
 }

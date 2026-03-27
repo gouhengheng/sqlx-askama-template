@@ -7,49 +7,52 @@
 [![GitHub Issues](https://img.shields.io/github/issues/gouhengheng/sqlx-askama-template)](https://github.com/gouhengheng/sqlx-askama-template/issues)
 [![CI Status](https://github.com/gouhengheng/sqlx-askama-template/actions/workflows/ci.yml/badge.svg)](https://github.com/gouhengheng/sqlx-askama-template/actions)
 
-A SQLx query builder based on the Askama template engine, providing type-safe SQL templates and parameter binding.  
+A SQLx query builder based on the Askama template engine, providing type-safe SQL templates and parameter binding.
 
-## Features  
+## Features
 
-- 🚀 **Zero-Cost Abstraction** - Compile-time optimized SQL generation  
-- 🔒 **Type Safety** - Automatic validation of SQL parameter types  
-- 📦 **Multi-Database Support** - PostgreSQL/MySQL/SQLite/Any  
-- 💡 **Smart Parameter Binding** - Auto-expansion for list parameters  
-- 🎨 **Template Syntax** - Full Askama templating capabilities  
+- 🚀 **Zero-Cost Abstraction** - Compile-time optimized SQL generation
+- 🔒 **Type Safety** - Automatic validation of SQL parameter types
+- 📦 **Multi-Database Support** - PostgreSQL/MySQL/SQLite/Any
+- 💡 **Smart Parameter Binding** - Auto-expansion for list parameters
+- 🎨 **Template Syntax** - Full Askama templating capabilities
 
 ## Require
-sqlx > 0.9.0-alpha.1
+sqlx > 0.9.0
 
-## Installation  
+## Installation
 
-Add to `Cargo.toml`:  
+Add to `Cargo.toml`:
 
-```toml  
-[dependencies]  
-sqlx-askama-template = "0.4.0-alpha.1"
+```toml
+[dependencies]
+sqlx-askama-template = "0.4.0"
+ 
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.9.0-alpha.1", default-features = false, features = [
+sqlx = { version = "0.9.0", default-features = false, features = [
     "all-databases",
     "runtime-tokio",
     "macros",
 ] }
 env_logger="0.11"
-```  
+futures-util = "0.3.31"
+```
 
-## Quick Start  
+## Quick Start
 
-### Basic Usage  
+### Basic Usage
 
-```rust 
-use sqlx::{AnyPool, Error, any::install_default_drivers};
+```rust
+use futures_util::{TryStreamExt, pin_mut};
+use sqlx::{AnyPool, Error, Row, any::install_default_drivers};
 
-use sqlx_askama_template::{BackendDB, DBType, SqlTemplate};
+use sqlx_askama_template::{BackendDB, DBType, PaginationInfo, SqlTemplate};
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
 struct User {
     id: i64,
     name: String,
 }
-#[derive(SqlTemplate)]
+#[derive(SqlTemplate, PartialEq, Eq, Debug)]
 #[template(source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
     union all 
@@ -64,7 +67,7 @@ pub struct UserQuery {
 }
 
 async fn simple_query(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
-    let users = [
+    let data = vec![
         User {
             id: 1,
             name: "admin".to_string(),
@@ -75,41 +78,105 @@ async fn simple_query(urls: Vec<(DBType, &str)>) -> Result<(), Error> {
         },
     ];
 
-    let mut user_query = UserQuery {
-        user_id: 1,
-        user_name: "admin".to_string(),
-    };
     for (db_type, url) in urls {
+        //  test count
+        let mut user_query = UserQuery {
+            user_id: 1,
+            user_name: "admin".into(),
+        };
         let pool = AnyPool::connect(url).await?;
-        // pool
+
+        let db_adatper = user_query.adapter();
+
+        let count = db_adatper.count(&pool).await?;
+        assert_eq!(2, count);
+
+        // test pagination
         let user: Option<User> = user_query
-            .adapter_render()
-            .set_page(1, 1)
+            .adapter()
+            .set_pagination(1, 1)
             .fetch_optional_as(&pool)
             .await?;
-        assert_eq!(user.as_ref(), users.first());
-        // connection
+        assert_eq!(data.first(), user.as_ref());
+        // println!("{user:?}");
+
         let mut conn = pool.acquire().await?;
-        let users1: Vec<User> = user_query
-            .adapter_render()
-            .set_page(1, 2)
+        let user: Vec<User> = user_query
+            .adapter()
+            .set_pagination(1, 2)
             .fetch_all_as(&mut *conn)
             .await?;
-        assert_eq!(users1, users[1..]);
+        assert_eq!(data[1..], user);
+        // println!("{user:?}");
 
-        // tx
-        let mut conn = pool.begin().await?;
-        let (get_db_type, _get_conn) = conn.backend_db().await?;
-        assert_eq!(db_type, get_db_type);
-        user_query.user_id = 9999;
-        let page_info = user_query
-            .adapter_render()
-            .count_page(1, &mut *conn)
-            .await?;
+        let page_info = user_query.adapter().pagination_info(1, &pool).await?;
+        assert_eq!(PaginationInfo::new(2, 1), page_info);
+        // println!("{page_info:?}");
+        //fecth
+        let mut tx = pool.begin().await?;
+
+        let rows = UserQuery {
+            user_id: 1,
+            user_name: "admin".into(),
+        }
+        .adapter()
+        .fetch_all(&mut *tx)
+        .await?;
+        assert_eq!(2, rows.len());
+        //println!("{:?}", rows.len());
+        let row = UserQuery {
+            user_id: 1,
+            user_name: "admin".into(),
+        }
+        .adapter()
+        .fetch_optional(&mut *tx)
+        .await?;
+        assert!(row.is_some());
+        let row = UserQuery {
+            user_id: 1,
+            user_name: "admin".into(),
+        }
+        .adapter()
+        .fetch_one(&mut *tx)
+        .await?;
+        assert_eq!(2, row.columns().len());
+        // fetch_as
+        let users: Vec<User> = user_query.adapter().fetch_all_as(&pool).await?;
+        assert_eq!(data, users);
+        //println!("{:?}", users);
+
+        let u: Option<User> = UserQuery {
+            user_id: 1,
+            user_name: "admin".into(),
+        }
+        .adapter()
+        .fetch_optional_as(&mut *tx)
+        .await?;
+        assert_eq!(data.first(), u.as_ref());
+        let u: User = UserQuery {
+            user_id: 1,
+            user_name: "admin".into(),
+        }
+        .adapter()
+        .fetch_one_as(&mut *tx)
+        .await?;
+        assert_eq!(data.first(), Some(&u));
+
+        // stream
+        let query = user_query.adapter();
+        {
+            let stream = query.fetch(&mut *tx);
+            pin_mut!(stream);
+            while let Some(row) = stream.try_next().await? {
+                assert_eq!(2, row.columns().len());
+            }
+        }
+
+        tx.rollback().await?;
         user_query.user_id = 1;
-
-        assert_eq!(page_info.total, 2);
-        assert_eq!(page_info.page_count, 2);
+        // test backend db type
+        let backend_db = pool.backend_db().await?;
+        assert_eq!(db_type, backend_db.0);
     }
 
     Ok(())
@@ -129,98 +196,144 @@ async fn main() -> Result<(), Error> {
             "postgres://postgres:postgres@localhost/postgres",
         ),
         (DBType::SQLite, "sqlite://db.file?mode=memory"),
-        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
+        (DBType::MySQL, "mysql://root:root@localhost/mysql"),
     ];
     simple_query(urls).await?;
 
     Ok(())
 }
-```  
 
-## Core Features  
+```
 
-### Template Syntax  
+## Core Features
 
-| Syntax             | Example                   | Description                  |  
-|---------------------|---------------------------|------------------------------|  
-| Single Parameter    | `{{e(user_id)}}`          | Binds a single parameter     |  
-| List Expansion      | `{{el(ids)}}`             | Expands to `IN (?, ?)`       |  
+### Template Syntax
 
-
-### Parameter Encoding Methods  
-
-| Method  | Description                   | Example               |  
-|---------|-------------------------------|-----------------------|  
-| `e()`   | Encodes a single value        | `{{e(user_id)}}`      |  
-| `el()`  | Encodes a list (`$1, $2...`)  | `{{el(ids)}}`         |  
+| Syntax             | Example                   | Description                  |
+|---------------------|---------------------------|------------------------------|
+| Single Parameter    | `{{e(user_id)}}`          | Binds a single parameter     |
+| List Expansion      | `{{el(ids)}}`             | Expands to `(?, ?)`       |
 
 
-## Multi-Database Support  
+### Parameter Encoding Methods
 
-| Database    | Parameter Style | Example            |  
-|-------------|-----------------|--------------------|  
-| PostgreSQL  | `$1, $2`        | `WHERE id = $1`    |  
-| MySQL       | `?`             | `WHERE id = ?`     |  
-| SQLite      | `?`             | `WHERE id = ?`     |  
+| Method  | Description                   | Example               |
+|---------|-------------------------------|-----------------------|
+| `e()`   | Encodes a single value        | `{{e(user_id)}}`      |
+| `el()`  | Encodes a list (`$1, $2...`)  | `{{el(ids)}}`         |
 
-## Macro Attributes  
 
-### `#[template]` - Core Template Attribute  
+## Multi-Database Support
 
-```rust  
-#[derive(SqlTemplate)]  
-#[template(  
-    source = "SQL template content",  // Required  
-    ext = "txt",                      // Askama file extension  
-    print = "all",                    // Optional debug output (none, ast, code, all)  
-    config = "path"                   // Optional custom Askama config path  
-)]  
-```  
+| Database    | Parameter Style | Example            |
+|-------------|-----------------|--------------------|
+| PostgreSQL  | `$1, $2`        | `WHERE id = $1`    |
+| MySQL       | `?`             | `WHERE id = ?`     |
+| SQLite      | `?`             | `WHERE id = ?`     |
 
-**Parameters**:  
-- `source`: Inline SQL template content (supports Askama syntax)  
-- `ext`: Askama file extension  
-- `print`: Debug mode for Askama  
-- `config`: Path to a custom Askama configuration file  
+## Macro Attributes
 
-### `#[add_type]` - Add Additional Type Constraints  
+### `#[template]` - Core Template Attribute
 
-Used to add `Encode + Type` constraints for non-field types in templates (e.g., `Vec<T>`, `HashMap<K, V>`).  
+```rust
+#[derive(SqlTemplate)]
+#[template(
+    source = "SQL template content",  // Required
+    ext = "txt",                      // Askama file extension
+    print = "all",                    // Optional debug output (none, ast, code, all)
+    config = "path"                   // Optional custom Askama config path
+)]
+```
 
-```rust  
-#[derive(SqlTemplate)]  
-#[add_type(chrono::NaiveDate, Option<&'q str>)]  // Add extra type support  
-```  
+**Parameters**:
+- `source`: Inline SQL template content (supports Askama syntax)
+- `ext`: Askama file extension
+- `print`: Debug mode for Askama
+- `config`: Path to a custom Askama configuration file
 
-**Features**:  
-- Adds type constraints for template-local variables  
-- Supports comma-separated types  
+### `#[add_type]` - Add Additional Type Constraints
 
-### `#[ignore_type]` - Skip Field Type Constraints  
+Used to add `Encode + Type` constraints for non-field types in templates (e.g., `Vec<T>`, `HashMap<K, V>`).
 
-```rust  
-#[derive(SqlTemplate)]  
-struct Query {  
-    #[ignore_type]  // Skip type checks for this field  
-    metadata: JsonValue  
-}  
-```  
+```rust
+#[derive(SqlTemplate)]
+#[add_type(chrono::NaiveDate, Option<&'q str>)]  // Add extra type support
+```
 
-**Use Cases**:  
-- Skip fields that do not require SQLx parameter binding  
-- Avoid unnecessary trait constraints for complex types  
+**Features**:
+- Adds type constraints for template-local variables
+- Supports comma-separated types
 
-## Full Example  
+### `#[ignore_type]` - Skip Field Type Constraints
 
-```rust  
-use std::collections::HashMap;  
+```rust
+#[derive(SqlTemplate)]
+struct Query {
+    #[ignore_type]  // Skip type checks for this field
+    metadata: JsonValue
+}
+```
 
-use sqlx_askama_template::SqlTemplate;  
+**Use Cases**:
+- Skip fields that do not require SQLx parameter binding
+- Avoid unnecessary trait constraints for complex types
+
+## Full Example
+
+```rust
+ use sqlx::Arguments;
+use sqlx_askama_template::SqlTemplate;
+use std::collections::HashMap;
+
+#[derive(SqlTemplate)]
+#[template(
+    source = r#"
+    {%- let v="abc".to_string() %}
+    SELECT {{e(v)}} as v,t.* FROM table t
+    WHERE arg1 = {{e(arg1)}}
+      AND arg2 = {{e(arg2)}}
+      AND arg3 = {{e(arg3)}}
+      AND arg4 = {{e(arg4.first())}}
+      AND arg5 = {{e(arg5.get(&0))}}
+      {%- let v2=3_i64 %}
+      AND arg6 = {{e(v2)}}
+      {%- let v3="abc".to_string() %}
+      AND arg7 = {{e(v3)}}
+      AND arg_list1 in {{el(arg4)}}
+      {%- let list=["abc".to_string()] %}
+      AND arg_temp_list1 in {{el(list.iter())}}
+      AND arg_list2 in {{el(arg5.values())}}
+      {%- if let Some(first) = arg4.first() %}
+        AND arg_option = {{e(first)}}
+      {%- endif %}
+      {%- if let Some(first) = arg5.get(&0) %}
+        AND arg_option1 = {{e(first)}}
+      {%- endif %}
+"#,
+    print = "all"
+)]
+#[add_type(Option<&'a i64>,bool)]
+pub struct QueryData<'a, T>
+where
+    T: Sized + Send + Sync,
+{
+    arg1: i64,
+    _arg1: i64, //same type
+    arg2: String,
+    arg3: &'a str,
+    #[ignore_type]
+    arg4: Vec<i64>,
+    #[ignore_type]
+    arg5: HashMap<i32, i64>,
+    #[ignore_type]
+    #[allow(unused)]
+    arg6: T,
+}
 
 #[derive(SqlTemplate)]
 #[template(source = r#"
     {%- let status_list = ["active", "pending"] %}
-    SELECT 
+    SELECT
         u.id,
         u.name,
         COUNT(o.id) AS order_count
@@ -248,7 +361,37 @@ pub struct ComplexQuery<'a> {
 }
 
 fn render_complex_sql() {
-   
+    let data = QueryData {
+        arg1: 42,
+        _arg1: 123,
+        arg2: "value".to_string(),
+        arg3: "reference",
+        arg4: vec![12, 12, 55, 66],
+        arg5: HashMap::from_iter([(0, 2), (1, 2), (2, 3)]),
+        arg6: 1,
+    };
+
+    let (sql, arg) =
+        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render(&data).unwrap();
+
+    assert_eq!(arg.unwrap().len(), 18);
+    println!("----{sql}----");
+    let data = QueryData {
+        arg1: 42,
+        _arg1: 123,
+        arg2: "value".to_string(),
+        arg3: "reference",
+        arg4: vec![12, 12, 55, 66],
+        arg5: HashMap::from_iter([(0, 2), (1, 2), (2, 3)]),
+        arg6: 1,
+    };
+
+    let (sql, arg) =
+        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render(&data).unwrap();
+
+    assert_eq!(arg.unwrap().len(), 18);
+    println!("----{sql}----");
+
     let data = ComplexQuery {
         filter_names: vec!["name1", "name2"],
         limit: 10,
@@ -256,24 +399,23 @@ fn render_complex_sql() {
         order_field: "id",
     };
 
-    let (sql, arg) =
-        <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+    let (sql, arg) = <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render(&data).unwrap();
 
     assert_eq!(arg.unwrap().len(), 6);
 
     println!("----{sql}----");
 }
 
-```  
+```
 
-## Best Practices  
+## Best Practices
 
-```markdown  
-1. Use `{% if %}` blocks for dynamic SQL  
-2. Use `add_type` to add type constraints for template-local variables  
-3. Use `ignore_type` to skip serialization for specific fields  
-4. Set `print = "none"` in production  
-```  
+```markdown
+1. Use `{% if %}` blocks for dynamic SQL
+2. Use `add_type` to add type constraints for template-local variables
+3. Use `ignore_type` to skip serialization for specific fields
+4. Set `print = "none"` in production
+```
 
 ## License
 

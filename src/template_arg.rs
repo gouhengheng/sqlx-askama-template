@@ -4,7 +4,7 @@ use sqlx_core::{Error, arguments::Arguments, database::Database, encode::Encode,
 /// SQL template argument processor handling safe parameter encoding and placeholder generation
 ///
 /// # Generic Parameters
-/// - `'t`: Lifetime for database arguments
+/// - `'q`: Lifetime for database arguments
 /// - `DB`: Database type implementing [`sqlx::Database`]
 /// - `D`: Template data type
 pub struct TemplateArg<'q, DB: Database, D> {
@@ -12,7 +12,7 @@ pub struct TemplateArg<'q, DB: Database, D> {
     error: RefCell<Option<Error>>,
     /// Stores SQL parameters
     arguments: RefCell<Option<DB::Arguments>>,
-    encode_placeholder_fn: Option<fn(usize, &mut String)>,
+    format_placeholder_fn: Option<fn(usize, &mut String)>,
     data: &'q D,
 }
 
@@ -25,16 +25,16 @@ impl<'q, DB: Database, D> TemplateArg<'q, DB, D> {
         TemplateArg {
             error: RefCell::new(None),
             arguments: RefCell::new(None),
-            encode_placeholder_fn: None,
+            format_placeholder_fn: None,
             data: d,
         }
     }
     /// Sets custom placeholder formatting function
     ///
     /// # Arguments
-    /// * `f` - Function that takes parameter index and appends placeholder
-    pub fn set_encode_placeholder_fn(&mut self, f: fn(usize, &mut String)) {
-        self.encode_placeholder_fn = Some(f);
+    /// * `format_placeholder` - Function that takes parameter index and appends placeholder
+    pub fn set_format_placeholder_fn(&mut self, format_placeholder: fn(usize, &mut String)) {
+        self.format_placeholder_fn = Some(format_placeholder);
     }
 
     /// Encodes a single parameter and returns its placeholder
@@ -63,7 +63,7 @@ impl<'q, DB: Database, D> TemplateArg<'q, DB, D> {
         }
 
         let mut placeholder = String::new();
-        if let Some(encode_placeholder_fn) = &self.encode_placeholder_fn {
+        if let Some(encode_placeholder_fn) = &self.format_placeholder_fn {
             encode_placeholder_fn(arguments.len(), &mut placeholder);
         } else if let Err(e) = arguments.format_placeholder(&mut placeholder) {
             *err = Some(Error::Encode(Box::new(e)));

@@ -13,30 +13,30 @@ use crate::{DatabaseDialect, db_adapter::BackendDB, sql_template_execute::SqlTem
 
 /// Pagination metadata container
 #[derive(Debug, PartialEq, Eq)]
-pub struct PageInfo {
+pub struct PaginationInfo {
     /// Total number of records
     pub total: i64,
-    /// Records per page
-    pub page_size: i64,
-    /// Calculated page count
-    pub page_count: i64,
+    /// Records per pagination
+    pub pagination_size: i64,
+    /// Calculated pagination count
+    pub pagination_count: i64,
 }
 
-impl PageInfo {
-    /// Constructs new PageInfo with automatic page count calculation
+impl PaginationInfo {
+    /// Constructs new PaginationInfo with automatic pagination count calculation
     ///
     /// # Arguments
     /// * `total` - Total records in dataset
-    /// * `page_size` - Desired records per page
-    pub fn new(total: i64, page_size: i64) -> PageInfo {
-        let mut page_count = total / page_size;
-        if total % page_size > 0 {
-            page_count += 1;
+    /// * `pagination_size` - Desired records per pagination
+    pub fn new(total: i64, pagination_size: i64) -> PaginationInfo {
+        let mut pagination_count = total / pagination_size;
+        if total % pagination_size > 0 {
+            pagination_count += 1;
         }
         Self {
             total,
-            page_size,
-            page_count,
+            pagination_size,
+            pagination_count,
         }
     }
 }
@@ -46,44 +46,38 @@ impl PageInfo {
 /// - `'q`: Query lifetime
 /// - `DB`: Database type
 /// - `T`: SQL template type
-pub struct DBAdapterManager<'q, DB, T>
+pub struct DBAdapter<'q, DB, T>
 where
     DB: Database,
     T: SqlTemplate<'q, DB>,
 {
-    pub(crate) sql: String,
     pub(crate) template: T,
     persistent: bool,
     _p: PhantomData<&'q DB>,
-    page_size: Option<i64>,
-    page_no: Option<i64>,
+    pagination_size: Option<i64>,
+    pagination_no: Option<i64>,
 }
 
-impl<'q, DB, T> DBAdapterManager<'q, DB, T>
+impl<'q, DB, T> DBAdapter<'q, DB, T>
 where
     DB: Database,
     T: SqlTemplate<'q, DB>,
 {
-    /// Creates new adapter with SQL buffer
+    /// Creates a new DBAdapter for the SQL template.
     ///
     /// # Arguments
     /// * `template` - SQL template instance
     pub fn new(template: T) -> Self {
         Self {
-            sql: String::new(),
             template,
             persistent: true,
-            page_no: None,
-            page_size: None,
+            pagination_no: None,
+            pagination_size: None,
             _p: PhantomData,
         }
     }
-
-    pub fn sql(&self) -> &String {
-        &self.sql
-    }
 }
-impl<'q, 'c, 'e, DB, T> DBAdapterManager<'q, DB, T>
+impl<'q, 'c, 'e, DB, T> DBAdapter<'q, DB, T>
 where
     DB: Database + Sync,
     T: SqlTemplate<'q, DB> + Send + 'q,
@@ -108,22 +102,14 @@ where
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
         let template = self.template.clone();
-        let page_no = self.page_no;
-        let page_size = self.page_size;
+
         async move {
             let (db_type, executor) = db_adapter.backend_db().await?;
-            let f = db_type.get_encode_placeholder_fn();
+            let f = db_type.placeholder_fn();
             let mut sql = String::new();
-            let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
-
-            if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
-                let mut args = arg.unwrap_or_default();
-                db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
-                arg = Some(args);
-            }
+            let arg = template.render_with_placeholder(f, &mut sql)?;
 
             db_type.write_count_sql(&mut sql);
-            //  self.sql = sql;
             let execute = SqlTemplateExecute::new(sql, arg).set_persistent(self.persistent);
             let (count,): (i64,) = execute.fetch_one_as(executor).await?;
             Ok(count)
@@ -133,25 +119,25 @@ where
     /// Calculates complete pagination metadata
     ///
     /// # Arguments
-    /// * `page_size` - Records per page
+    /// * `pagination_size` - Records per pagination
     /// * `db_adapter` - Database connection adapter
     #[inline]
-    pub async fn count_page<Adapter>(
+    pub async fn pagination_info<Adapter>(
         self,
-        page_size: i64,
+        pagination_size: i64,
         db_adapter: Adapter,
-    ) -> Result<PageInfo, Error>
+    ) -> Result<PaginationInfo, Error>
     where
         Adapter: BackendDB<'c, DB> + 'c,
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
         let count = self.count(db_adapter).await?;
-        Ok(PageInfo::new(count, page_size))
+        Ok(PaginationInfo::new(count, pagination_size))
     }
     /// Sets pagination parameters
-    pub fn set_page(mut self, page_size: i64, page_no: i64) -> Self {
-        self.page_no = Some(page_no);
-        self.page_size = Some(page_size);
+    pub fn set_pagination(mut self, pagination_size: i64, pagination_no: i64) -> Self {
+        self.pagination_no = Some(pagination_no);
+        self.pagination_size = Some(pagination_size);
         self
     }
 
@@ -213,21 +199,20 @@ where
         Adapter: BackendDB<'c, DB> + 'c,
     {
         let template = self.template.clone();
-        let page_no = self.page_no;
-        let page_size = self.page_size;
+        let pagination_no = self.pagination_no;
+        let pagination_size = self.pagination_size;
         Box::pin(async_stream::try_stream! {
             let (db_type, executor) = db_adapter.backend_db().await?;
-            let f = db_type.get_encode_placeholder_fn();
+            let f = db_type.placeholder_fn();
             let mut sql = String::new();
-            let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
+            let mut arg = template.render_with_placeholder(f, &mut sql)?;
 
-            if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
+            if let (Some(pagination_no), Some(pagination_size)) = (pagination_no, pagination_size) {
                 let mut args = arg.unwrap_or_default();
-                db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
+                db_type.write_pagination_sql(&mut sql, pagination_size, pagination_no, &mut args)?;
                 arg = Some(args);
             }
 
-           // self.sql = sql;
             let execute = SqlTemplateExecute::new(sql, arg).set_persistent(self.persistent);
             let mut stream = execute.fetch_many(executor);
             while let Some(item) = stream.try_next().await? {
@@ -333,21 +318,20 @@ where
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
         let template = self.template.clone();
-        let page_no = self.page_no;
-        let page_size = self.page_size;
+        let pagination_no = self.pagination_no;
+        let pagination_size = self.pagination_size;
         Box::pin(async_stream::try_stream! {
         let (db_type, executor) = db_adapter.backend_db().await?;
-        let f = db_type.get_encode_placeholder_fn();
+        let f = db_type.placeholder_fn();
         let mut sql = String::new();
-        let mut arg = template.render_sql_with_encode_placeholder_fn(f, &mut sql)?;
+        let mut arg = template.render_with_placeholder(f, &mut sql)?;
 
-        if let (Some(page_no), Some(page_size)) = (page_no, page_size) {
+        if let (Some(pagination_no), Some(pagination_size)) = (pagination_no, pagination_size) {
             let mut args = arg.unwrap_or_default();
-            db_type.write_page_sql(&mut sql, page_size, page_no, &mut args)?;
+            db_type.write_pagination_sql(&mut sql, pagination_size, pagination_no, &mut args)?;
             arg = Some(args);
         }
 
-        //self.sql = sql;
         let execute = SqlTemplateExecute::new(sql, arg).set_persistent(self.persistent);
         let mut stream = execute.fetch_many(executor).map(|v| match v {
             Ok(Either::Right(row)) => O::from_row(&row).map(Either::Right),

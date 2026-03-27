@@ -172,9 +172,9 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
             DB: ::sqlx::Database,
             #bound_types
         {
-            fn render_sql_with_encode_placeholder_fn(
+            fn render_with_placeholder(
                 self,
-                f: ::std::option::Option<fn(usize, &mut String)>,
+                format_placeholder: ::std::option::Option<fn(usize, &mut String)>,
                 sql_buffer: &mut String,
             ) -> ::std::result::Result<
                 ::std::option::Option<DB::Arguments>,
@@ -200,8 +200,8 @@ pub fn sql_template(input: TokenStream) -> TokenStream {
                 }
 
                 let mut wrapper = Wrapper(::sqlx_askama_template::TemplateArg::new(self));
-                if let Some(f) = f {
-                    wrapper.0.set_encode_placeholder_fn(f);
+                if let Some(format_placeholder) = format_placeholder {
+                    wrapper.0.set_format_placeholder_fn(format_placeholder);
                 }
                 let render_res = ::sqlx_askama_template::askama::Template::render_into(&wrapper, sql_buffer)
                     .map_err(|e| ::sqlx::Error::Encode(::std::boxed::Box::new(e)))?;

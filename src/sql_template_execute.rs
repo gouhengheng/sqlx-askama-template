@@ -60,8 +60,7 @@ where
     DB: Database + HasStatementCache,
     DB::Arguments: IntoArguments<DB>,
 {
-    /// to sqlx_core::QueryAs
-    /// Converts the SQL template to a `QueryAs` object, which can be executed to fetch rows
+    /// Converts the SQL template to a `sqlx_core::QueryAs` object, which can be executed to fetch rows.
     #[inline]
     pub fn to_query_as<O>(self) -> QueryAs<'q, DB, O, DB::Arguments>
     where
@@ -73,8 +72,7 @@ where
         };
         q.persistent(self.persistent)
     }
-    /// to sqlx_core::Query
-    /// Converts the SQL template to a `Query` object, which can be executed to fetch rows
+    /// Converts the SQL template to a `sqlx_core::Query` object, which can be executed to fetch rows.
     #[inline]
     pub fn to_query(self) -> Query<'q, DB, DB::Arguments> {
         let q = match self.arguments {
@@ -111,12 +109,10 @@ where
         self.to_query().try_map(f)
     }
 }
-impl<'q, 'c, 'e, DB> SqlTemplateExecute<DB>
+impl<'c, 'e, DB> SqlTemplateExecute<DB>
 where
     DB: Database,
-    'q: 'e,
     'c: 'e,
-    Self: 'q,
 {
     /// like sqlx_core::Query::execute
     /// Execute the query and return the number of rows affected.
@@ -219,7 +215,7 @@ where
         executor.fetch_optional(self).await
     }
 
-    // QueryAs functions wrapp
+    // QueryAs functions wrap
 
     /// like sqlx_core::QueryAs::fetch
     /// Execute the query and return the generated results as a stream.
@@ -295,7 +291,7 @@ where
             .await
             .and_then(|row| row.ok_or(sqlx_core::Error::RowNotFound))
     }
-    /// like sqlx_core_core::QueryAs::fetch_optional
+    /// like sqlx_core::QueryAs::fetch_optional
     /// Execute the query, returning the first row or `None` otherwise.
     ///
     /// ### Note: for best performance, ensure the query returns at most one row.

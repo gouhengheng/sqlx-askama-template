@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use sqlx::{AnyPool, Arguments, Error, Executor, FromRow, MySqlPool, any::install_default_drivers};
+use sqlx::{
+    AnyPool, Arguments, AssertSqlSafe, Error, Executor, FromRow, MySqlPool, Postgres,
+    any::install_default_drivers, 
+};
 
 use sqlx_askama_template::SqlTemplate;
 #[derive(sqlx::prelude::FromRow, PartialEq, Eq, Debug)]
@@ -9,9 +12,9 @@ struct User {
     name: String,
 }
 #[derive(SqlTemplate)]
-#[template(ext="html",askama=askama,source = r#"
+#[template(askama=askama,source = r#"
     select {{e(user_id)}} as id,{{e(user_name)}} as name
-    union all 
+    union all
     {%- let id=99999_i64 %}
     {%- let name="super man" %}
     select {{e(id)}} as id,{{e(name)}} as name
@@ -41,7 +44,9 @@ async fn simple_query() -> Result<(), Error> {
     //pg
 
     let pool = sqlx::PgPool::connect("postgres://postgres:postgres@localhost/postgres").await?;
-
+    let (sql, arg) = <&UserQuery as SqlTemplate<'_, Postgres>>::render(&user_query)?;
+    let sql = AssertSqlSafe(sql);
+    let _rows = pool.fetch_all((sql, arg)).await?;
     let execute = user_query.render_executable()?;
 
     let rows = pool.fetch_all(execute).await?;
@@ -68,7 +73,7 @@ async fn simple_query() -> Result<(), Error> {
     let pool = MySqlPool::connect("mysql://root:root@localhost/mysql").await?;
 
     let db_users: Vec<User> = user_query
-        .adapter_render()
+        .adapter()
         .set_persistent(false)
         .fetch_all_as(&pool)
         .await?;
@@ -100,7 +105,7 @@ async fn simple_query() -> Result<(), Error> {
       {%- endif %}
       {%- if let Some(first) = arg5.get(&0) %}
         AND arg_option1 = {{e(first)}}
-      {%- endif %}     
+      {%- endif %}
 "#,
     print = "all"
 )]
@@ -125,7 +130,7 @@ where
 #[derive(SqlTemplate)]
 #[template(source = r#"
     {%- let status_list = ["active", "pending"] %}
-    SELECT 
+    SELECT
         u.id,
         u.name,
         COUNT(o.id) AS order_count
@@ -164,7 +169,7 @@ fn render_complex_sql() {
     };
 
     let (sql, arg) =
-        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render(&data).unwrap();
 
     assert_eq!(arg.unwrap().len(), 18);
     println!("----{sql}----");
@@ -179,7 +184,7 @@ fn render_complex_sql() {
     };
 
     let (sql, arg) =
-        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+        <&QueryData<'_, i32> as SqlTemplate<'_, sqlx::Postgres>>::render(&data).unwrap();
 
     assert_eq!(arg.unwrap().len(), 18);
     println!("----{sql}----");
@@ -191,8 +196,7 @@ fn render_complex_sql() {
         order_field: "id",
     };
 
-    let (sql, arg) =
-        <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render_sql(&data).unwrap();
+    let (sql, arg) = <&ComplexQuery<'_> as SqlTemplate<'_, sqlx::Postgres>>::render(&data).unwrap();
 
     assert_eq!(arg.unwrap().len(), 6);
 
