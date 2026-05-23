@@ -24,9 +24,9 @@ repository = "https://github.com/gouhengheng/sqlx-askama-template"
 rust-version = "1.94.0"
 
 [dependencies]
-sqlx-core = { version = "0.9.0", default-features = false, features = ["any"] }
+sqlx-core = { version = "0.9.0", default-features = false, features = ["any","offline"] }
 sqlx-askama-template-macro = { path = "./sqlx-askama-template-macro", version = "0.4.0"}
-#sqlx-askama-template-macro = "0.2.1"
+#sqlx-askama-template-macro = "0.4.0"
 askama = "0.16"
 futures-core = "0.3.31"
 
