@@ -11,7 +11,7 @@ use sqlx_core::{
     executor::{Execute, Executor},
     pool::PoolConnection,
     sql_str::SqlStr,
-    try_stream,
+    
     types::Type,
 };
 /// Abstracts SQL dialect differences across database systems
@@ -279,16 +279,16 @@ where
     {
         match self.executor {
             Either::Left(executor) => executor.fetch_many(query),
-            Either::Right(mut conn) => Box::pin(try_stream! {
+            Either::Right(mut conn) => Box::pin(async_stream::try_stream! {
 
 
                 let mut s = conn.fetch_many(query);
 
                 while let Some(v) = s.try_next().await? {
-                    r#yield!(v);
+                    yield v;
                 }
 
-                Ok(())
+                
             }),
         }
     }

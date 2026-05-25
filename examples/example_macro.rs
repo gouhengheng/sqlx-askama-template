@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use sqlx::{
     AnyPool, Arguments, AssertSqlSafe, Error, Executor, FromRow, MySqlPool, Postgres,
-    any::install_default_drivers, 
+    any::install_default_drivers,
 };
 
 use sqlx_askama_template::SqlTemplate;

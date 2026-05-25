@@ -101,7 +101,7 @@ where
         Adapter: BackendDB<'c, DB> + 'c,
         (i64,): for<'r> FromRow<'r, DB::Row>,
     {
-        let template = self.template.clone();
+        let template = self.template;
 
         async move {
             let (db_type, executor) = db_adapter.backend_db().await?;
@@ -198,7 +198,7 @@ where
     where
         Adapter: BackendDB<'c, DB> + 'c,
     {
-        let template = self.template.clone();
+        let template = self.template;
         let pagination_no = self.pagination_no;
         let pagination_size = self.pagination_size;
         Box::pin(async_stream::try_stream! {
@@ -317,7 +317,7 @@ where
         Adapter: BackendDB<'c, DB> + 'c,
         O: Send + Unpin + for<'r> FromRow<'r, DB::Row> + 'e,
     {
-        let template = self.template.clone();
+        let template = self.template;
         let pagination_no = self.pagination_no;
         let pagination_size = self.pagination_size;
         Box::pin(async_stream::try_stream! {

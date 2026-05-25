@@ -237,7 +237,7 @@ async fn run() -> Result<(), Error> {
             "postgres://postgres:postgres@localhost/postgres",
         ),
         (DBType::SQLite, "sqlite://db.file?mode=memory"),
-        //(DBType::MySQL, "mysql://root:root@localhost/mysql"),
+        (DBType::MySQL, "mysql://root:root@localhost/mysql"),
     ];
     test_backend(urls).await?;
 
